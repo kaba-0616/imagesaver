@@ -1,0 +1,56 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project ImageSaver.xcodeproj \
+            -scheme ImageSaverApp
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild archive \
+            -project ImageSaver.xcodeproj \
+            -scheme ImageSaverApp \
+            -configuration Release \
+            -archivePath build/ImageSaver.xcarchive \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package IPA (unsigned, for Sideloadly)
+        run: |
+          set -e
+          APP_PATH="build/ImageSaver.xcarchive/Products/Applications"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH"/*.app build/Payload/
+          cd build
+          zip -r -y ImageSaver.ipa Payload
+          cd ..
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImageSaver-ipa
+          path: build/ImageSaver.ipa
+          retention-days: 14
