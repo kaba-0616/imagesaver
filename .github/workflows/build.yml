@@ -29,6 +29,8 @@ jobs:
 
       - name: Archive (unsigned)
         run: |
+          mkdir -p build
+          set -o pipefail
           xcodebuild archive \
             -project ImageSaver.xcodeproj \
             -scheme ImageSaverApp \
@@ -39,7 +41,17 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM="" \
-            ONLY_ACTIVE_ARCH=NO
+            ONLY_ACTIVE_ARCH=NO \
+            2>&1 | tee build/xcodebuild.log
+
+      - name: Show compile errors (on failure)
+        if: failure()
+        run: |
+          echo "===== Lines containing 'error:' ====="
+          grep -n "error:" build/xcodebuild.log || echo "(no 'error:' lines found in log)"
+          echo ""
+          echo "===== Last 150 lines of full log ====="
+          tail -n 150 build/xcodebuild.log
 
       - name: Package IPA (unsigned, for Sideloadly)
         run: |

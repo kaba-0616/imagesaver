@@ -157,7 +157,7 @@ struct ImageGridView: View {
             .disabled(selected.isEmpty)
         }
         .padding()
-        .background(.bar)
+        .background(.ultraThinMaterial)
     }
 
     @ViewBuilder
