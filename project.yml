@@ -15,7 +15,7 @@ settings:
 packages:
   SwiftDraw:
     url: https://github.com/swhitty/SwiftDraw.git
-    from: 0.18.0
+    exactVersion: 0.18.3
 
 targets:
   ImageSaverApp:
