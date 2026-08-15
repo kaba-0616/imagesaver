@@ -182,10 +182,16 @@ struct ImageGridView: View {
         case .saving(let done, let total):
             ProgressOverlay(text: "保存中… \(done)/\(total)")
         case .finished(let succeeded, let failed, let message):
-            ResultOverlay(succeeded: succeeded, failed: failed, message: message) {
-                photoSaver.reset()
-                if failed == 0 { selected.removeAll() }
-            }
+            ResultOverlay(
+                succeeded: succeeded,
+                failed: failed,
+                message: message,
+                log: photoSaver.log,
+                onDismiss: {
+                    photoSaver.reset()
+                    if failed == 0 { selected.removeAll() }
+                }
+            )
         }
     }
 
@@ -209,58 +215,56 @@ private struct ThumbnailCell: View {
     var body: some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
-            .overlay(
-                ZStack(alignment: .topTrailing) {
-                    Rectangle().fill(Color(white: 0.12))
-
-                    Group {
-                        if let thumbnail = loader.thumbnails[image.id] {
-                            Image(uiImage: thumbnail)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } else if loader.failed.contains(image.id) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .foregroundColor(.gray)
-                        } else {
-                            ProgressView().tint(.gray)
-                        }
-                    }
-
-                    // Format + pixel dimensions. Constrained to the cell width and
-                    // allowed to shrink so long labels never overflow the tile.
-                    VStack {
-                        Spacer()
-                        HStack(spacing: 0) {
-                            Text(badgeText)
-                                .font(.system(size: 9, weight: .medium))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.6)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Color.black.opacity(0.6))
-                                .foregroundColor(.white)
-                                .cornerRadius(3)
-                            Spacer(minLength: 0)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                    .padding(3)
-
-                    Button(action: onToggleSelect) {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 22))
-                            .symbolRenderingModeIfAvailable()
-                            .foregroundColor(isSelected ? .accentColor : Color.white.opacity(0.85))
-                            .shadow(radius: 2)
-                            .padding(5)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                }
-            )
+            .overlay(thumbnail)
+            .overlay(badge, alignment: .bottomLeading)
+            .overlay(selectionButton, alignment: .topTrailing)
             .clipped()
             .contentShape(Rectangle())
             .onTapGesture { onTapImage() }
             .onAppear { loader.requestThumbnail(for: image) }
+    }
+
+    private var thumbnail: some View {
+        ZStack {
+            Rectangle().fill(Color(white: 0.12))
+
+            if let thumbnail = loader.thumbnails[image.id] {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if loader.failed.contains(image.id) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundColor(.gray)
+            } else {
+                ProgressView().tint(.gray)
+            }
+        }
+        .clipped()
+    }
+
+    // Bottom-left aligned; the text shrinks rather than spilling past the tile edge.
+    private var badge: some View {
+        Text(badgeText)
+            .font(.system(size: 9, weight: .medium))
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Color.black.opacity(0.65))
+            .foregroundColor(.white)
+            .cornerRadius(3)
+            .padding(3)
+    }
+
+    private var selectionButton: some View {
+        Button(action: onToggleSelect) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 22))
+                .symbolRenderingModeIfAvailable()
+                .foregroundColor(isSelected ? .accentColor : Color.white.opacity(0.85))
+                .shadow(radius: 2)
+                .padding(5)
+        }
     }
 
     private var badgeText: String {
@@ -306,7 +310,10 @@ private struct ResultOverlay: View {
     let succeeded: Int
     let failed: Int
     let message: String?
+    let log: [PhotoSaver.LogEntry]
     let onDismiss: () -> Void
+
+    @State private var showLog = false
 
     var body: some View {
         ZStack {
@@ -337,14 +344,39 @@ private struct ResultOverlay: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Button("OK") { onDismiss() }
-                    .buttonStyle(.borderedProminent)
+                if showLog {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(log) { entry in
+                                Text(entry.text)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(entry.isError ? .red : .primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .frame(height: 180)
+                    .padding(8)
+                    .background(Color.black.opacity(0.2))
+                    .cornerRadius(6)
+                }
+
+                HStack(spacing: 12) {
+                    Button(showLog ? "ログを隠す" : "ログを見る") {
+                        showLog.toggle()
+                    }
+                    .font(.footnote)
+
+                    Button("OK") { onDismiss() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
             .padding(24)
-            .frame(maxWidth: 320)
+            .frame(maxWidth: 340)
             .background(.regularMaterial)
             .cornerRadius(12)
-            .padding(24)
+            .padding(20)
         }
     }
 }
