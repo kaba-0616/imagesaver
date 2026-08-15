@@ -21,6 +21,8 @@ final class PhotoSaver: ObservableObject {
     /// Human-readable trace of the last save run, surfaced in the UI so problems
     /// are diagnosable on-device (an extension has no console to check).
     @Published private(set) var log: [LogEntry] = []
+    /// IDs that made it into the photo library; the grid hides these.
+    @Published private(set) var savedImageIDs: Set<Int> = []
 
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -68,21 +70,22 @@ final class PhotoSaver: ObservableObject {
         // Bounded concurrency keeps memory in check when saving many large photos at once.
         let semaphore = AsyncSemaphore(limit: 4)
 
-        await withTaskGroup(of: (String, Result<Void, Error>).self) { group in
+        await withTaskGroup(of: (Int, String, Result<Void, Error>).self) { group in
             for image in images {
                 group.addTask { [weak self] in
-                    guard let self else { return ("", .failure(SaveError.cancelled)) }
+                    guard let self else { return (image.id, "", .failure(SaveError.cancelled)) }
                     await semaphore.wait()
                     defer { Task { await semaphore.signal() } }
                     let result = await self.saveOne(image)
-                    return (image.url.lastPathComponent, result)
+                    return (image.id, image.url.lastPathComponent, result)
                 }
             }
 
-            for await (name, result) in group {
+            for await (id, name, result) in group {
                 switch result {
                 case .success:
                     succeeded += 1
+                    savedImageIDs.insert(id)
                     appendLog("OK: \(name)")
                 case .failure(let error):
                     failed += 1

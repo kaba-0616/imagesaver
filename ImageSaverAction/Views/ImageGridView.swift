@@ -33,13 +33,15 @@ struct ImageGridView: View {
     @State private var displayMode: DisplayMode = .grid
     @State private var sizeFilter: SizeFilter = .all
     @State private var fullscreenIndex: Int = 0
+    @State private var showLogSheet = false
 
     private var visibleImages: [PageImage] {
-        guard sizeFilter != .all else { return images }
-        let threshold = sizeFilter.rawValue
-        return images.filter { image in
+        images.filter { image in
+            // Already-saved images drop out of the grid so it's obvious what is left to do.
+            guard !photoSaver.savedImageIDs.contains(image.id) else { return false }
+            guard sizeFilter != .all else { return true }
             let known = max(image.width, image.height)
-            return known == 0 || known >= threshold
+            return known == 0 || known >= sizeFilter.rawValue
         }
     }
 
@@ -55,6 +57,9 @@ struct ImageGridView: View {
                 .zIndex(1)
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showLogSheet) {
+            LogSheet(log: photoSaver.log) { showLogSheet = false }
+        }
     }
 
     private var mainContent: some View {
@@ -158,36 +163,64 @@ struct ImageGridView: View {
     }
 
     private var bottomBar: some View {
-        HStack {
-            Button(selected.count == visibleImages.count ? "選択解除" : "全て選択") {
-                if selected.count == visibleImages.count {
-                    selected.removeAll()
-                } else {
-                    selected = Set(visibleImages.map(\.id))
+        VStack(spacing: 6) {
+            // Always-visible status line: overlays can be suppressed inside an
+            // extension's presentation context, so state is mirrored here too.
+            HStack(spacing: 6) {
+                Text(AppVersion.short)
+                    .foregroundColor(.gray)
+                Text(statusText)
+                    .foregroundColor(statusIsError ? .red : .gray)
+                    .lineLimit(1)
+                Spacer()
+                if case .finished = photoSaver.state {
+                    Button("ログ") { showLogSheet = true }
+                        .font(.system(size: 11))
                 }
             }
-            .disabled(visibleImages.isEmpty)
+            .font(.system(size: 11, design: .monospaced))
 
-            Spacer()
+            HStack {
+                Button(selected.count == visibleImages.count ? "選択解除" : "全て選択") {
+                    if selected.count == visibleImages.count {
+                        selected.removeAll()
+                    } else {
+                        selected = Set(visibleImages.map(\.id))
+                    }
+                }
+                .disabled(visibleImages.isEmpty)
 
-            Text(AppVersion.short)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.gray)
+                Spacer()
 
-            Spacer()
-
-            Button {
-                let targets = images.filter { selected.contains($0.id) }
-                Task { await photoSaver.save(targets) }
-            } label: {
-                Text("保存する (\(selected.count))")
-                    .bold()
+                Button {
+                    let targets = images.filter { selected.contains($0.id) }
+                    Task { await photoSaver.save(targets) }
+                } label: {
+                    Text("保存する (\(selected.count))")
+                        .bold()
+                }
+                .disabled(selected.isEmpty)
             }
-            .disabled(selected.isEmpty)
         }
         .padding()
         .background(Color.black)
         .overlay(Divider().opacity(0.3), alignment: .top)
+    }
+
+    private var statusText: String {
+        switch photoSaver.state {
+        case .idle:
+            return "待機中"
+        case .saving(let done, let total):
+            return "保存中 \(done)/\(total)"
+        case .finished(let succeeded, let failed, _):
+            return "完了 成功\(succeeded) 失敗\(failed)"
+        }
+    }
+
+    private var statusIsError: Bool {
+        if case .finished(_, let failed, _) = photoSaver.state { return failed > 0 }
+        return false
     }
 
     @ViewBuilder
@@ -205,7 +238,8 @@ struct ImageGridView: View {
                 log: photoSaver.log,
                 onDismiss: {
                     photoSaver.reset()
-                    if failed == 0 { selected.removeAll() }
+                    // Saved tiles disappear from the grid, so clear their selection.
+                    selected.subtract(photoSaver.savedImageIDs)
                 }
             )
         }
@@ -394,5 +428,35 @@ private struct ResultOverlay: View {
             .cornerRadius(12)
             .padding(20)
         }
+    }
+}
+
+private struct LogSheet: View {
+    let log: [PhotoSaver.LogEntry]
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(log) { entry in
+                        Text(entry.text)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(entry.isError ? .red : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("保存ログ")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("閉じる") { onClose() }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
     }
 }
