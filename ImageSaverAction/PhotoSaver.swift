@@ -43,7 +43,24 @@ final class PhotoSaver: ObservableObject {
         // even before the permission prompt appears.
         state = .saving(done: 0, total: images.count)
         appendLog("保存開始: \(images.count)件")
+
+        // Requesting Photos access without this key in the extension's own
+        // Info.plist terminates the process immediately, which looks like the
+        // share sheet simply closing.
+        let usageDescription = Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryAddUsageDescription") as? String
+        appendLog("説明文の有無: \(usageDescription == nil ? "なし(致命的)" : "あり")", isError: usageDescription == nil)
+
+        guard usageDescription != nil else {
+            state = .finished(
+                succeeded: 0,
+                failed: images.count,
+                message: "アプリの設定不備です(写真アクセスの説明文が未設定)。開発者に報告してください。"
+            )
+            return
+        }
+
         appendLog("権限状態: \(authorizationDescription)")
+        appendLog("権限リクエスト開始…")
 
         let authorized = await requestAddOnlyAuthorization()
         appendLog("権限リクエスト後: \(authorizationDescription)")
@@ -116,6 +133,10 @@ final class PhotoSaver: ObservableObject {
 
     private func appendLog(_ text: String, isError: Bool = false) {
         log.append(LogEntry(time: Date(), text: text, isError: isError))
+        // Persist after every line: if the extension is killed mid-save the log
+        // is still readable on the next launch, which is the only way to see
+        // what happened when the host tears the UI down.
+        PersistentLog.write(log)
     }
 
     private var authorizationDescription: String {

@@ -58,7 +58,10 @@ struct ImageGridView: View {
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showLogSheet) {
-            LogSheet(log: photoSaver.log) { showLogSheet = false }
+            LogSheet(
+                currentLog: photoSaver.log,
+                previousLog: PersistentLog.read()
+            ) { showLogSheet = false }
         }
     }
 
@@ -173,10 +176,10 @@ struct ImageGridView: View {
                     .foregroundColor(statusIsError ? .red : .gray)
                     .lineLimit(1)
                 Spacer()
-                if case .finished = photoSaver.state {
-                    Button("ログ") { showLogSheet = true }
-                        .font(.system(size: 11))
-                }
+                // Always available: the previous run's log persists even if the
+                // extension was killed before the result could be shown.
+                Button("ログ") { showLogSheet = true }
+                    .font(.system(size: 11))
             }
             .font(.system(size: 11, design: .monospaced))
 
@@ -432,19 +435,33 @@ private struct ResultOverlay: View {
 }
 
 private struct LogSheet: View {
-    let log: [PhotoSaver.LogEntry]
+    let currentLog: [PhotoSaver.LogEntry]
+    let previousLog: [String]
     let onClose: () -> Void
 
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(log) { entry in
-                        Text(entry.text)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(entry.isError ? .red : .primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 12) {
+                    if !currentLog.isEmpty {
+                        section(title: "今回の保存") {
+                            ForEach(currentLog) { entry in
+                                line(entry.text, isError: entry.isError)
+                            }
+                        }
+                    }
+
+                    if !previousLog.isEmpty {
+                        section(title: "前回の記録(強制終了時も残ります)") {
+                            ForEach(Array(previousLog.enumerated()), id: \.offset) { _, text in
+                                line(text, isError: text.hasPrefix("[ERR]"))
+                            }
+                        }
+                    }
+
+                    if currentLog.isEmpty && previousLog.isEmpty {
+                        Text("まだ記録がありません")
+                            .foregroundColor(.secondary)
                     }
                 }
                 .padding()
@@ -458,5 +475,23 @@ private struct LogSheet: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    @ViewBuilder
+    private func section<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            content()
+        }
+    }
+
+    private func line(_ text: String, isError: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundColor(isError ? .red : .primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
     }
 }
