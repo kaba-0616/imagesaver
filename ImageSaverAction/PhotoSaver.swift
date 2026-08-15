@@ -61,13 +61,7 @@ final class PhotoSaver: ObservableObject {
     private func saveOne(_ image: PageImage) async -> Bool {
         do {
             let (data, _) = try await session.data(from: image.url)
-            let uiImage: UIImage
-
-            if image.isSVG {
-                uiImage = try SVGRasterizer.rasterize(data: data, maxPixelSize: 2048)
-            } else if let decoded = UIImage(data: data) {
-                uiImage = decoded
-            } else {
+            guard let uiImage = UIImage(data: data) else {
                 throw ImageLoadError.decodeFailed
             }
 
