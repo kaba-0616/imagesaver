@@ -19,6 +19,16 @@ struct ContentView: View {
                         Label("機能拡張が表示されない場合", systemImage: "questionmark.circle")
                     }
                 }
+
+                Section("バージョン") {
+                    HStack {
+                        Text("インストール中のビルド")
+                        Spacer()
+                        Text(AppVersion.short)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
             .navigationTitle("ImageSaver")
         }

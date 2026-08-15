@@ -46,6 +46,18 @@ struct ImageGridView: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
 
     var body: some View {
+        ZStack {
+            mainContent
+
+            // Kept outside the NavigationView so it always draws above the
+            // navigation bar and toolbar rather than underneath them.
+            savingOverlay
+                .zIndex(1)
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var mainContent: some View {
         NavigationView {
             VStack(spacing: 0) {
                 Picker("表示", selection: $displayMode) {
@@ -108,8 +120,6 @@ struct ImageGridView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .overlay(savingOverlay)
-        .preferredColorScheme(.dark)
     }
 
     private var gridContent: some View {
@@ -157,6 +167,12 @@ struct ImageGridView: View {
                 }
             }
             .disabled(visibleImages.isEmpty)
+
+            Spacer()
+
+            Text(AppVersion.short)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.gray)
 
             Spacer()
 

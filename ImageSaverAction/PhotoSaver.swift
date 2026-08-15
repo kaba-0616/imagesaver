@@ -29,9 +29,17 @@ final class PhotoSaver: ObservableObject {
     }()
 
     func save(_ images: [PageImage]) async {
-        guard !images.isEmpty else { return }
-
         log.removeAll()
+
+        guard !images.isEmpty else {
+            appendLog("保存対象が0件です", isError: true)
+            state = .finished(succeeded: 0, failed: 0, message: "画像が選択されていません")
+            return
+        }
+
+        // Show the progress overlay immediately so the tap is always acknowledged,
+        // even before the permission prompt appears.
+        state = .saving(done: 0, total: images.count)
         appendLog("保存開始: \(images.count)件")
         appendLog("権限状態: \(authorizationDescription)")
 
