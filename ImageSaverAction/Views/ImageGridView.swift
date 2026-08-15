@@ -57,6 +57,16 @@ struct ImageGridView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
                 .background(Color.black)
+                .onAppear {
+                    // Default unselected text is dark gray, which is unreadable
+                    // against the dark segmented control on this black bar.
+                    UISegmentedControl.appearance().setTitleTextAttributes(
+                        [.foregroundColor: UIColor.white], for: .normal
+                    )
+                    UISegmentedControl.appearance().setTitleTextAttributes(
+                        [.foregroundColor: UIColor.black], for: .selected
+                    )
+                }
 
                 if visibleImages.isEmpty {
                     Spacer()
@@ -171,10 +181,10 @@ struct ImageGridView: View {
             EmptyView()
         case .saving(let done, let total):
             ProgressOverlay(text: "保存中… \(done)/\(total)")
-        case .finished(let succeeded, let failed):
-            ResultOverlay(succeeded: succeeded, failed: failed) {
+        case .finished(let succeeded, let failed, let message):
+            ResultOverlay(succeeded: succeeded, failed: failed, message: message) {
                 photoSaver.reset()
-                selected.removeAll()
+                if failed == 0 { selected.removeAll() }
             }
         }
     }
@@ -216,20 +226,24 @@ private struct ThumbnailCell: View {
                         }
                     }
 
-                    // Format + pixel dimensions
+                    // Format + pixel dimensions. Constrained to the cell width and
+                    // allowed to shrink so long labels never overflow the tile.
                     VStack {
                         Spacer()
-                        HStack {
+                        HStack(spacing: 0) {
                             Text(badgeText)
                                 .font(.system(size: 9, weight: .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(Color.black.opacity(0.6))
                                 .foregroundColor(.white)
                                 .cornerRadius(3)
-                            Spacer()
+                            Spacer(minLength: 0)
                         }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     .padding(3)
 
                     Button(action: onToggleSelect) {
@@ -240,6 +254,7 @@ private struct ThumbnailCell: View {
                             .shadow(radius: 2)
                             .padding(5)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 }
             )
             .clipped()
@@ -290,24 +305,46 @@ private struct ProgressOverlay: View {
 private struct ResultOverlay: View {
     let succeeded: Int
     let failed: Int
+    let message: String?
     let onDismiss: () -> Void
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.4).ignoresSafeArea()
-            VStack(spacing: 16) {
+            Color.black.opacity(0.5).ignoresSafeArea()
+            VStack(spacing: 14) {
                 Image(systemName: failed == 0 ? "checkmark.circle.fill" : "exclamationmark.circle")
                     .font(.system(size: 40))
                     .foregroundColor(failed == 0 ? .green : .orange)
+
                 Text(failed == 0
                      ? "\(succeeded)枚を保存しました"
                      : "\(succeeded)枚保存、\(failed)枚失敗しました")
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+
+                if failed == 0 {
+                    Text("「写真」アプリの最近の項目に追加されています")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let message {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Button("OK") { onDismiss() }
                     .buttonStyle(.borderedProminent)
             }
             .padding(24)
+            .frame(maxWidth: 320)
             .background(.regularMaterial)
             .cornerRadius(12)
+            .padding(24)
         }
     }
 }
