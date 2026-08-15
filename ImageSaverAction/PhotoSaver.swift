@@ -87,9 +87,6 @@ final class PhotoSaver: ObservableObject {
             return
         }
 
-        let beforeCount = photoLibraryCount()
-        appendLog("保存前の写真総数: \(beforeCount)")
-
         state = .saving(done: 0, total: images.count)
 
         var succeeded = 0
@@ -125,12 +122,7 @@ final class PhotoSaver: ObservableObject {
             }
         }
 
-        let afterCount = photoLibraryCount()
-        appendLog("保存後の写真総数: \(afterCount) (増加 \(afterCount - beforeCount))")
-
-        if succeeded > 0 && afterCount == beforeCount {
-            appendLog("警告: 保存は成功したはずですが写真総数が増えていません", isError: true)
-        }
+        appendLog("完了: 成功\(succeeded) 失敗\(failed)")
 
         state = .finished(
             succeeded: succeeded,
@@ -160,15 +152,6 @@ final class PhotoSaver: ObservableObject {
         case .limited: return "一部のみ許可"
         @unknown default: return "不明"
         }
-    }
-
-    /// Counting assets requires read access; with add-only permission this
-    /// returns 0, so treat it as a hint rather than proof.
-    private func photoLibraryCount() -> Int {
-        guard PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized else {
-            return -1
-        }
-        return PHAsset.fetchAssets(with: .image, options: nil).count
     }
 
     private func saveOne(_ image: PageImage) async -> Result<Void, Error> {

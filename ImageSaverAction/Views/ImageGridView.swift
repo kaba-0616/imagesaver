@@ -48,21 +48,16 @@ struct ImageGridView: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
 
     var body: some View {
-        ZStack {
-            mainContent
-
-            // Kept outside the NavigationView so it always draws above the
-            // navigation bar and toolbar rather than underneath them.
-            savingOverlay
-                .zIndex(1)
-        }
-        .preferredColorScheme(.dark)
-        .sheet(isPresented: $showLogSheet) {
-            LogSheet(
-                currentLog: photoSaver.log,
-                previousLog: PersistentLog.read()
-            ) { showLogSheet = false }
-        }
+        // No modal result popup: progress and outcome are shown inline in the
+        // bottom status line, and details are available via the log sheet.
+        mainContent
+            .preferredColorScheme(.dark)
+            .sheet(isPresented: $showLogSheet) {
+                LogSheet(
+                    currentLog: photoSaver.log,
+                    previousLog: PersistentLog.read()
+                ) { showLogSheet = false }
+            }
     }
 
     private var mainContent: some View {
@@ -197,7 +192,11 @@ struct ImageGridView: View {
 
                 Button {
                     let targets = images.filter { selected.contains($0.id) }
-                    Task { await photoSaver.save(targets) }
+                    Task {
+                        await photoSaver.save(targets)
+                        // Saved tiles leave the grid, so drop them from the selection.
+                        selected.subtract(photoSaver.savedImageIDs)
+                    }
                 } label: {
                     Text("保存する (\(selected.count))")
                         .bold()
@@ -224,28 +223,6 @@ struct ImageGridView: View {
     private var statusIsError: Bool {
         if case .finished(_, let failed, _) = photoSaver.state { return failed > 0 }
         return false
-    }
-
-    @ViewBuilder
-    private var savingOverlay: some View {
-        switch photoSaver.state {
-        case .idle:
-            EmptyView()
-        case .saving(let done, let total):
-            ProgressOverlay(text: "保存中… \(done)/\(total)")
-        case .finished(let succeeded, let failed, let message):
-            ResultOverlay(
-                succeeded: succeeded,
-                failed: failed,
-                message: message,
-                log: photoSaver.log,
-                onDismiss: {
-                    photoSaver.reset()
-                    // Saved tiles disappear from the grid, so clear their selection.
-                    selected.subtract(photoSaver.savedImageIDs)
-                }
-            )
-        }
     }
 
     private func toggleSelection(_ id: Int) {
@@ -339,98 +316,6 @@ private extension View {
             return AnyView(self.symbolRenderingMode(.hierarchical))
         }
         return AnyView(self)
-    }
-}
-
-private struct ProgressOverlay: View {
-    let text: String
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.4).ignoresSafeArea()
-            VStack(spacing: 12) {
-                ProgressView()
-                Text(text).foregroundColor(.white)
-            }
-            .padding(24)
-            .background(.ultraThinMaterial)
-            .cornerRadius(12)
-        }
-    }
-}
-
-private struct ResultOverlay: View {
-    let succeeded: Int
-    let failed: Int
-    let message: String?
-    let log: [PhotoSaver.LogEntry]
-    let onDismiss: () -> Void
-
-    @State private var showLog = false
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.5).ignoresSafeArea()
-            VStack(spacing: 14) {
-                Image(systemName: failed == 0 ? "checkmark.circle.fill" : "exclamationmark.circle")
-                    .font(.system(size: 40))
-                    .foregroundColor(failed == 0 ? .green : .orange)
-
-                Text(failed == 0
-                     ? "\(succeeded)枚を保存しました"
-                     : "\(succeeded)枚保存、\(failed)枚失敗しました")
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-
-                if failed == 0 {
-                    Text("「写真」アプリの最近の項目に追加されています")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-
-                if let message {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if showLog {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 3) {
-                            ForEach(log) { entry in
-                                Text(entry.text)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(entry.isError ? .red : .primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
-                    .frame(height: 180)
-                    .padding(8)
-                    .background(Color.black.opacity(0.2))
-                    .cornerRadius(6)
-                }
-
-                HStack(spacing: 12) {
-                    Button(showLog ? "ログを隠す" : "ログを見る") {
-                        showLog.toggle()
-                    }
-                    .font(.footnote)
-
-                    Button("OK") { onDismiss() }
-                        .buttonStyle(.borderedProminent)
-                }
-            }
-            .padding(24)
-            .frame(maxWidth: 340)
-            .background(.regularMaterial)
-            .cornerRadius(12)
-            .padding(20)
-        }
     }
 }
 
