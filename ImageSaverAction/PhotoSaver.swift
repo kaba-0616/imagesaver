@@ -60,10 +60,22 @@ final class PhotoSaver: ObservableObject {
         }
 
         appendLog("権限状態: \(authorizationDescription)")
-        appendLog("権限リクエスト開始…")
 
-        let authorized = await requestAddOnlyAuthorization()
-        appendLog("権限リクエスト後: \(authorizationDescription)")
+        // Raising the system permission prompt from inside an action extension
+        // terminates the process on iOS 26, so the prompt has to be answered in
+        // the container app first. Here we only read the existing decision.
+        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        guard status != .notDetermined else {
+            appendLog("未許可のため中止(本体アプリで許可が必要)", isError: true)
+            state = .finished(
+                succeeded: 0,
+                failed: images.count,
+                message: "先にホーム画面の「ImageSaver」アプリを開き、「写真への保存を許可する」をタップしてください。"
+            )
+            return
+        }
+
+        let authorized = (status == .authorized || status == .limited)
 
         guard authorized else {
             appendLog("写真へのアクセスが拒否されました", isError: true)
@@ -197,18 +209,6 @@ final class PhotoSaver: ObservableObject {
         }
     }
 
-    private func requestAddOnlyAuthorization() async -> Bool {
-        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
-        switch status {
-        case .authorized, .limited:
-            return true
-        case .notDetermined:
-            let newStatus = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            return newStatus == .authorized || newStatus == .limited
-        default:
-            return false
-        }
-    }
 }
 
 enum SaveError: LocalizedError {

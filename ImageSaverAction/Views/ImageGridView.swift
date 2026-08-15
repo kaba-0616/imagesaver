@@ -469,12 +469,30 @@ private struct LogSheet: View {
             .navigationTitle("保存ログ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("全部コピー") {
+                        UIPasteboard.general.string = allLogText
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("閉じる") { onClose() }
                 }
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var allLogText: String {
+        var lines: [String] = []
+        if !currentLog.isEmpty {
+            lines.append("=== 今回の保存 ===")
+            lines.append(contentsOf: currentLog.map { ($0.isError ? "[ERR] " : "") + $0.text })
+        }
+        if !previousLog.isEmpty {
+            lines.append("=== 前回の記録 ===")
+            lines.append(contentsOf: previousLog)
+        }
+        return lines.joined(separator: "\n")
     }
 
     @ViewBuilder

@@ -1,6 +1,9 @@
 import SwiftUI
+import Photos
 
 struct ContentView: View {
+    @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+
     var body: some View {
         NavigationView {
             List {
@@ -20,6 +23,36 @@ struct ContentView: View {
                     }
                 }
 
+                // The extension cannot safely raise the Photos permission prompt
+                // itself, so it has to be granted here first.
+                Section {
+                    HStack {
+                        Label("写真への保存", systemImage: statusIcon)
+                            .foregroundColor(statusColor)
+                        Spacer()
+                        Text(statusText)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if photoStatus == .notDetermined {
+                        Button("写真への保存を許可する") {
+                            Task {
+                                photoStatus = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+                            }
+                        }
+                    } else if photoStatus == .denied || photoStatus == .restricted {
+                        Button("設定アプリを開く") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("必要な許可")
+                } footer: {
+                    Text("共有シートから保存する前に、ここで写真への保存を許可しておく必要があります。")
+                }
+
                 Section("バージョン") {
                     HStack {
                         Text("インストール中のビルド")
@@ -31,6 +64,34 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("ImageSaver")
+            .onAppear {
+                photoStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+            }
+        }
+    }
+
+    private var statusText: String {
+        switch photoStatus {
+        case .authorized: return "許可済み"
+        case .limited: return "一部のみ許可"
+        case .denied: return "拒否"
+        case .restricted: return "制限あり"
+        case .notDetermined: return "未設定"
+        @unknown default: return "不明"
+        }
+    }
+
+    private var statusIcon: String {
+        switch photoStatus {
+        case .authorized, .limited: return "checkmark.circle.fill"
+        default: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch photoStatus {
+        case .authorized, .limited: return .green
+        default: return .orange
         }
     }
 }
