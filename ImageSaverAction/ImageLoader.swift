@@ -32,7 +32,7 @@ final class ImageLoader: ObservableObject {
             if Task.isCancelled { return }
 
             do {
-                let thumbnail = try await self.downloadThumbnail(url: image.url, maxPixelSize: maxPixelSize)
+                let thumbnail = try await self.downloadThumbnail(url: image.url, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
                 if Task.isCancelled { return }
                 self.thumbnails[image.id] = thumbnail
             } catch {
@@ -54,7 +54,7 @@ final class ImageLoader: ObservableObject {
             defer { Task { await self.fullImageSemaphore.signal() } }
 
             if !Task.isCancelled,
-               let decoded = try? await self.downloadThumbnail(url: pageImage.url, maxPixelSize: maxPixelSize) {
+               let decoded = try? await self.downloadThumbnail(url: pageImage.url, maxPixelSize: maxPixelSize, isSVG: pageImage.isSVG) {
                 self.fullImages[id] = decoded
             }
             self.fullImageTasks[id] = nil
@@ -73,8 +73,12 @@ final class ImageLoader: ObservableObject {
         fullImageTasks.removeAll()
     }
 
-    private func downloadThumbnail(url: URL, maxPixelSize: CGFloat) async throws -> UIImage {
+    private func downloadThumbnail(url: URL, maxPixelSize: CGFloat, isSVG: Bool) async throws -> UIImage {
         let (data, _) = try await session.data(from: url)
+
+        if isSVG {
+            return try SVGRasterizer.rasterize(data: data, maxPixelSize: maxPixelSize)
+        }
 
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw ImageLoadError.decodeFailed

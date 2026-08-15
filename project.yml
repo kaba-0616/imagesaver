@@ -16,6 +16,11 @@ settings:
     # third-party resigner (Sideloadly) could fail to re-sign correctly.
     ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: NO
 
+packages:
+  SwiftDraw:
+    url: https://github.com/swhitty/SwiftDraw.git
+    exactVersion: 0.18.3
+
 targets:
   ImageSaverApp:
     type: application
@@ -36,7 +41,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: ImageSaverAction
@@ -63,8 +68,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2.action
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
         SKIP_INSTALL: true
+    dependencies:
+      - package: SwiftDraw
 
 schemes:
   ImageSaverApp:

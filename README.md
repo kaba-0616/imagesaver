@@ -9,10 +9,15 @@ Mac不要・Windowsだけでビルド〜インストールまで完結する構�
 
 1. このリポジトリをGitHubにpushする
 2. GitHub Actions がクラウド上のMacで自動ビルドし、未署名の `ImageSaver.ipa` を作成する
-3. Windows用ツール「Sideloadly」で、無料のApple IDを使いその場署名してiPhone/iPadにインストールする
-4. Safariの設定で機能拡張を有効化する
+3. **AltStore** で、無料のApple IDを使いその場署名してiPhone/iPadにインストールする
+4. Safariの共有シートでImageSaverを有効化する
 
 Xcodeのインストールや操作は一切不要です。
+
+> **重要: Sideloadlyは使わないこと**
+> Sideloadly(v0.60時点)はiOS 26の拡張機能の署名に対応しておらず、アプリ本体は起動できても
+> 共有シートから拡張機能を呼び出した瞬間に `CODESIGNING / Invalid Page` で強制終了します
+> (クラッシュログすら残らないこともある)。AltStoreを使えば正常に動作します。
 
 ---
 
@@ -40,25 +45,32 @@ pushすると自動的に `.github/workflows/build.yml` が実行されます。
 
 コードを修正したら、再度pushすれば自動的に再ビルドされます(`workflow_dispatch` にも対応しているので、Actionsタブから手動で「Run workflow」も可能です)。
 
-## 3. Sideloadlyでインストールする
+## 3. AltStoreでインストールする
 
-1. Windows PCに [Sideloadly](https://sideloadly.io/) をインストールする
-2. iPhone/iPadをUSBケーブルでPCに接続する(初回は端末側で「このコンピュータを信頼しますか?」を許可)
-3. Sideloadlyを起動し、iTunes/Apple Mobile Device Support が必要な場合は案内に従ってインストールする
-4. Sideloadly画面に `ImageSaver.ipa` をドラッグ&ドロップする
-5. Apple IDとパスワードの入力を求められたら、お使いの無料Apple IDでサインインする(2ファクタ認証のコード入力が必要な場合あり)
-6. 「Start」でインストール開始。iPhone/iPadのホーム画面に「ImageSaver」アイコンが追加されます
+### 初回のみ: AltServer / AltStore のセットアップ
 
-### 初回起動時: 開発者を信頼する
+1. [Apple公式サイト](https://www.apple.com/itunes/)からiTunesとiCloudをインストールする
+   (**Microsoft Store版では動作しない**。既にStore版が入っている場合はアンインストールしてから入れ直す)
+2. [AltServer](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows) をダウンロードし、`AltInstaller.zip` を展開して `AltInstaller.msi` を実行
+3. iPhoneをUSB接続し、iTunesを開いて **「Wi-Fi経由でこのiPhoneと同期」にチェックを入れて「適用」**
+   (これを忘れると `AltServer could not find this device` エラーになる)
+4. タスクバー通知領域のAltServerアイコンを**左クリック**(右クリックではない)→「Install AltStore」→ 端末を選択
+5. Apple IDとパスワードを入力
+6. iPhone側「設定」→「一般」→「VPNとデバイス管理」→ プロファイルを「信頼」
 
-インストール後にアプリを開こうとすると「信頼されていないデベロッパ」と表示されます。
+### ipaをインストールする
 
-「設定」→「一般」→「VPNとデバイス管理」→ 該当のApple IDのプロファイルを選択 →「信頼」をタップしてください。
+1. `ImageSaver.ipa` をPCの **iCloud Drive** フォルダにコピーする(iPhoneから見えるようにするため)
+2. iPhoneでAltStoreアプリを開き、「My Apps」タブ → 左上の「+」
+3. iCloud Driveから `ImageSaver.ipa` を選択
+4. **「App Contains Extensions」と聞かれたら必ず「Keep App Extensions」を選ぶ**
+   (「Remove App Extensions」を選ぶと肝心の拡張機能が入らない)
+5. インストール完了を待つ
 
 ### 無料Apple IDの制限について
 
 - インストールしたアプリは **7日間で自動的に使えなくなります**
-- 7日以内にSideloadlyで同じPCから再インストールしてください(自動再署名機能もあります。Sideloadlyの案内に従ってください)
+- AltStoreはPCでAltServerが起動していて同じWi-Fiにいれば、バックグラウンドで自動的に再署名(リフレッシュ)してくれます
 - 年99ドルのApple Developer Programに登録すると、有効期限が1年に延びます
 
 ## 4. Safariの共有シートでImageSaverを有効にする
@@ -82,9 +94,7 @@ ImageSaverは「設定→Safari→機能拡張」に出てくるタイプの拡�
 6. 「フルスクリーン」表示に切り替えると1枚ずつ大きく確認しながら選択できる
 7. 下部の「保存する」をタップするとカメラロールに保存される
 
-対応フォーマット: JPEG / PNG / GIF / HEIF(HEIC) / WebP
-
-SVGは非対応です(サイドロード環境での署名問題を避けるため、変換ライブラリを使わない構成にしています)。SVG画像は選択しても保存に失敗した扱いになります。
+対応フォーマット: JPEG / PNG / GIF / HEIF(HEIC) / WebP / SVG(ラスタライズして保存)
 
 ## 既知の制限・注意点
 
