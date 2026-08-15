@@ -58,11 +58,11 @@ targets:
       properties:
         CFBundleDisplayName: ImageSaver
         NSExtension:
-          NSExtensionPointIdentifier: com.apple.Safari.action
+          NSExtensionPointIdentifier: com.apple.ui-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ActionViewController
-          NSExtensionJavaScriptPreprocessingFile: Action
           NSExtensionAttributes:
             NSExtensionActivationRule: TRUEPREDICATE
+            NSExtensionJavaScriptPreprocessingFile: Action
         NSPhotoLibraryAddUsageDescription: "選択した画像をカメラロールに保存するために使用します。"
     entitlements:
       path: ImageSaverAction/ImageSaverAction.entitlements

@@ -55,7 +55,7 @@ struct ContentView: View {
 private struct EnableExtensionGuideView: View {
     var body: some View {
         List {
-            Text("「設定」アプリ → 「Safari」→「機能拡張」から ImageSaver を有効にし、「すべてのWebサイトを許可」を選択してください。iOSのバージョンによっては「設定」→「アプリ」→「Safari」→「機能拡張」の場所にあります。")
+            Text("ImageSaverはSafariの共有シートの「アクション」として動作します。共有ボタンをタップし、アイコンが並んだ列を左端までスワイプして「その他」をタップ、「アクションを編集」でImageSaverをオンにしてください。設定アプリではなく、Safariの共有シートの中に設定箇所があります。")
         }
         .navigationTitle("機能拡張の有効化")
     }
