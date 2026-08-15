@@ -43,7 +43,7 @@ struct ImageGridView: View {
         }
     }
 
-    private let columns = [GridItem(.adaptive(minimum: 100, maximum: 140), spacing: 4)]
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
 
     var body: some View {
         NavigationView {
@@ -55,12 +55,13 @@ struct ImageGridView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
-                .padding(.top, 8)
+                .padding(.vertical, 8)
+                .background(Color.black)
 
                 if visibleImages.isEmpty {
                     Spacer()
                     Text("画像が見つかりませんでした")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.gray)
                     Spacer()
                 } else if displayMode == .grid {
                     gridContent
@@ -70,6 +71,7 @@ struct ImageGridView: View {
 
                 bottomBar
             }
+            .background(Color.black.ignoresSafeArea())
             .navigationTitle(pageTitle.isEmpty ? "ImageSaver" : pageTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -97,11 +99,12 @@ struct ImageGridView: View {
         }
         .navigationViewStyle(.stack)
         .overlay(savingOverlay)
+        .preferredColorScheme(.dark)
     }
 
     private var gridContent: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 4) {
+            LazyVGrid(columns: columns, spacing: 1) {
                 ForEach(Array(visibleImages.enumerated()), id: \.element.id) { index, image in
                     ThumbnailCell(
                         image: image,
@@ -115,8 +118,8 @@ struct ImageGridView: View {
                     .environmentObject(loader)
                 }
             }
-            .padding(4)
         }
+        .background(Color.black)
     }
 
     private var fullscreenContent: some View {
@@ -157,7 +160,8 @@ struct ImageGridView: View {
             .disabled(selected.isEmpty)
         }
         .padding()
-        .background(.ultraThinMaterial)
+        .background(Color.black)
+        .overlay(Divider().opacity(0.3), alignment: .top)
     }
 
     @ViewBuilder
@@ -193,47 +197,76 @@ private struct ThumbnailCell: View {
     @EnvironmentObject private var loader: ImageLoader
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Group {
-                if let thumbnail = loader.thumbnails[image.id] {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else if loader.failed.contains(image.id) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(.secondary)
-                } else {
-                    ProgressView()
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay(
+                ZStack(alignment: .topTrailing) {
+                    Rectangle().fill(Color(white: 0.12))
+
+                    Group {
+                        if let thumbnail = loader.thumbnails[image.id] {
+                            Image(uiImage: thumbnail)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } else if loader.failed.contains(image.id) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundColor(.gray)
+                        } else {
+                            ProgressView().tint(.gray)
+                        }
+                    }
+
+                    // Format + pixel dimensions
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Text(badgeText)
+                                .font(.system(size: 9, weight: .medium))
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.black.opacity(0.6))
+                                .foregroundColor(.white)
+                                .cornerRadius(3)
+                            Spacer()
+                        }
+                    }
+                    .padding(3)
+
+                    Button(action: onToggleSelect) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 22))
+                            .symbolRenderingModeIfAvailable()
+                            .foregroundColor(isSelected ? .accentColor : Color.white.opacity(0.85))
+                            .shadow(radius: 2)
+                            .padding(5)
+                    }
                 }
-            }
-            .frame(width: 110, height: 110)
+            )
             .clipped()
             .contentShape(Rectangle())
             .onTapGesture { onTapImage() }
             .onAppear { loader.requestThumbnail(for: image) }
+    }
 
-            Button(action: onToggleSelect) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(isSelected ? .accentColor : .white)
-                    .background(Circle().fill(Color.black.opacity(0.3)))
-                    .padding(4)
-            }
-
-            VStack {
-                Spacer()
-                HStack {
-                    Text(image.formatLabel)
-                        .font(.caption2)
-                        .padding(.horizontal, 4)
-                        .background(Color.black.opacity(0.5))
-                        .foregroundColor(.white)
-                        .cornerRadius(3)
-                    Spacer()
-                }
-            }
-            .frame(width: 110, height: 110)
+    private var badgeText: String {
+        // Prefer the real pixel size read from the file; fall back to the DOM's layout size.
+        if let size = loader.pixelSizes[image.id] {
+            return "\(image.formatLabel) \(Int(size.width))×\(Int(size.height))"
         }
-        .cornerRadius(6)
+        if image.width > 0, image.height > 0 {
+            return "\(image.formatLabel) \(image.width)×\(image.height)"
+        }
+        return image.formatLabel
+    }
+}
+
+private extension View {
+    // Keeps the checkmark readable over both light and dark thumbnails.
+    func symbolRenderingModeIfAvailable() -> some View {
+        if #available(iOS 15.0, *) {
+            return AnyView(self.symbolRenderingMode(.hierarchical))
+        }
+        return AnyView(self)
     }
 }
 

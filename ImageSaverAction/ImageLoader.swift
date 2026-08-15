@@ -9,6 +9,9 @@ final class ImageLoader: ObservableObject {
     @Published private(set) var thumbnails: [Int: UIImage] = [:]
     @Published private(set) var fullImages: [Int: UIImage] = [:]
     @Published private(set) var failed: Set<Int> = []
+    /// True pixel dimensions read from the downloaded file, which are usually
+    /// more accurate than the layout sizes the page's DOM reported.
+    @Published private(set) var pixelSizes: [Int: CGSize] = [:]
 
     private var tasks: [Int: Task<Void, Never>] = [:]
     private var fullImageTasks: [Int: Task<Void, Never>] = [:]
@@ -32,9 +35,12 @@ final class ImageLoader: ObservableObject {
             if Task.isCancelled { return }
 
             do {
-                let thumbnail = try await self.downloadThumbnail(url: image.url, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+                let (thumbnail, pixelSize) = try await self.downloadThumbnail(url: image.url, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
                 if Task.isCancelled { return }
                 self.thumbnails[image.id] = thumbnail
+                if let pixelSize {
+                    self.pixelSizes[image.id] = pixelSize
+                }
             } catch {
                 if !Task.isCancelled {
                     self.failed.insert(image.id)
@@ -54,8 +60,11 @@ final class ImageLoader: ObservableObject {
             defer { Task { await self.fullImageSemaphore.signal() } }
 
             if !Task.isCancelled,
-               let decoded = try? await self.downloadThumbnail(url: pageImage.url, maxPixelSize: maxPixelSize, isSVG: pageImage.isSVG) {
+               let (decoded, pixelSize) = try? await self.downloadThumbnail(url: pageImage.url, maxPixelSize: maxPixelSize, isSVG: pageImage.isSVG) {
                 self.fullImages[id] = decoded
+                if let pixelSize {
+                    self.pixelSizes[id] = pixelSize
+                }
             }
             self.fullImageTasks[id] = nil
         }
@@ -73,15 +82,28 @@ final class ImageLoader: ObservableObject {
         fullImageTasks.removeAll()
     }
 
-    private func downloadThumbnail(url: URL, maxPixelSize: CGFloat, isSVG: Bool) async throws -> UIImage {
+    private func downloadThumbnail(
+        url: URL,
+        maxPixelSize: CGFloat,
+        isSVG: Bool
+    ) async throws -> (image: UIImage, pixelSize: CGSize?) {
         let (data, _) = try await session.data(from: url)
 
         if isSVG {
-            return try SVGRasterizer.rasterize(data: data, maxPixelSize: maxPixelSize)
+            let rendered = try SVGRasterizer.rasterize(data: data, maxPixelSize: maxPixelSize)
+            return (rendered, nil)
         }
 
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw ImageLoadError.decodeFailed
+        }
+
+        // Read the full-resolution dimensions from the header before downsampling.
+        var pixelSize: CGSize?
+        if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? Int,
+           let height = properties[kCGImagePropertyPixelHeight] as? Int {
+            pixelSize = CGSize(width: width, height: height)
         }
 
         let options: [CFString: Any] = [
@@ -95,7 +117,7 @@ final class ImageLoader: ObservableObject {
             throw ImageLoadError.decodeFailed
         }
 
-        return UIImage(cgImage: cgImage)
+        return (UIImage(cgImage: cgImage), pixelSize)
     }
 }
 

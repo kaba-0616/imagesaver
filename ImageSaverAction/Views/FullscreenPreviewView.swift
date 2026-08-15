@@ -11,9 +11,14 @@ struct FullscreenPreviewView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
+            // Fills the whole page slot so `content` centers within it
+            // instead of collapsing to the top.
+            Color.black
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
 
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .scaleEffect(scale)
                 .gesture(
                     MagnificationGesture()
@@ -39,7 +44,30 @@ struct FullscreenPreviewView: View {
                     .background(Circle().fill(Color.black.opacity(0.4)))
                     .padding()
             }
+
+            VStack {
+                Spacer()
+                Text(infoText)
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.6))
+                    .foregroundColor(.white)
+                    .cornerRadius(4)
+                    .padding(.bottom, 44)
+            }
+            .frame(maxWidth: .infinity)
         }
+    }
+
+    private var infoText: String {
+        if let size = loader.pixelSizes[image.id] {
+            return "\(image.formatLabel)  \(Int(size.width))×\(Int(size.height))"
+        }
+        if image.width > 0, image.height > 0 {
+            return "\(image.formatLabel)  \(image.width)×\(image.height)"
+        }
+        return image.formatLabel
     }
 
     @ViewBuilder
