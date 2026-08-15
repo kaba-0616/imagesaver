@@ -17,6 +17,6 @@ enum SVGRasterizer {
 
         // scale: 1 so the rendered pixel dimensions equal targetSize exactly
         // (SwiftDraw would otherwise multiply by UIScreen.main.scale).
-        return svg.rasterize(size: targetSize, scale: 1)
+        return svg.rasterize(with: targetSize, scale: 1)
     }
 }
