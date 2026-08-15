@@ -11,6 +11,10 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
+    # No embedded framework copies of the Swift runtime: iOS 15+ provides it
+    # natively, and any embedded dylib inside the .appex is another thing a
+    # third-party resigner (Sideloadly) could fail to re-sign correctly.
+    ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: NO
 
 targets:
   ImageSaverApp:
