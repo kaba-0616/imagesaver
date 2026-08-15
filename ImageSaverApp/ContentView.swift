@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var history: [HistoryEntry] = HistoryStore.load()
-
     var body: some View {
         NavigationView {
             List {
@@ -21,34 +19,9 @@ struct ContentView: View {
                         Label("機能拡張が表示されない場合", systemImage: "questionmark.circle")
                     }
                 }
-
-                if !history.isEmpty {
-                    Section("最近開いたページ") {
-                        ForEach(history) { entry in
-                            Button {
-                                openInSafari(entry.pageURL)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.pageTitle.isEmpty ? entry.pageURL : entry.pageTitle)
-                                        .foregroundColor(.primary)
-                                        .lineLimit(1)
-                                    Text("\(entry.imageCount)枚の画像 ・ \(entry.date.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
             }
             .navigationTitle("ImageSaver")
-            .onAppear { history = HistoryStore.load() }
         }
-    }
-
-    private func openInSafari(_ urlString: String) {
-        guard let url = URL(string: urlString) else { return }
-        UIApplication.shared.open(url)
     }
 }
 
