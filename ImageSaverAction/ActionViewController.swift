@@ -84,7 +84,14 @@ final class ActionViewController: UIViewController {
                 guard let urlString = raw["url"] as? String, let url = URL(string: urlString) else { continue }
                 let width = (raw["width"] as? NSNumber)?.intValue ?? 0
                 let height = (raw["height"] as? NSNumber)?.intValue ?? 0
-                images.append(PageImage(id: index, url: url, width: width, height: height))
+                let origin = raw["origin"] as? String ?? "dom"
+                images.append(PageImage(
+                    id: index,
+                    url: url,
+                    width: width,
+                    height: height,
+                    isFromSourceOnly: origin == "source"
+                ))
             }
 
             completion(images, pageTitle, pageURL)

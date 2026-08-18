@@ -32,6 +32,10 @@ struct ImageGridView: View {
     @State private var selected: Set<Int> = []
     @State private var displayMode: DisplayMode = .grid
     @State private var sizeFilter: SizeFilter = .all
+    /// Off by default: feed-style sites (Instagram and friends) keep images
+    /// from unrelated posts in their payload, and including them makes the
+    /// grid look like it scraped the wrong page.
+    @State private var includeSourceOnly = false
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
 
@@ -39,6 +43,7 @@ struct ImageGridView: View {
         images.filter { image in
             // Already-saved images drop out of the grid so it's obvious what is left to do.
             guard !photoSaver.savedImageIDs.contains(image.id) else { return false }
+            guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard sizeFilter != .all else { return true }
             let known = max(image.width, image.height)
             return known == 0 || known >= sizeFilter.rawValue
@@ -116,8 +121,25 @@ struct ImageGridView: View {
                                 }
                             }
                         }
+
+                        if hasSourceOnlyImages {
+                            Divider()
+                            Button {
+                                includeSourceOnly.toggle()
+                            } label: {
+                                if includeSourceOnly {
+                                    Label("ソース内の画像も表示", systemImage: "checkmark")
+                                } else {
+                                    Text("ソース内の画像も表示")
+                                }
+                            }
+                        }
                     } label: {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
+                        // Filled while anything is being held back, so hidden
+                        // images are discoverable without opening the menu.
+                        Image(systemName: hasHiddenImages
+                              ? "line.3.horizontal.decrease.circle.fill"
+                              : "line.3.horizontal.decrease.circle")
                     }
                 }
             }
@@ -218,6 +240,16 @@ struct ImageGridView: View {
         .padding()
         .background(Color.black)
         .overlay(Divider().opacity(0.3), alignment: .top)
+    }
+
+    private var hasHiddenImages: Bool {
+        sizeFilter != .all || (!includeSourceOnly && hasSourceOnlyImages)
+    }
+
+    /// Only worth offering the toggle when the deeper scan actually found
+    /// something the page does not render itself.
+    private var hasSourceOnlyImages: Bool {
+        images.contains { $0.isFromSourceOnly }
     }
 
     private var statusText: String {

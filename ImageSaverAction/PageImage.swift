@@ -5,6 +5,10 @@ struct PageImage: Identifiable, Hashable {
     let url: URL
     let width: Int
     let height: Int
+    /// Found only in the page's markup text, not rendered by it. Often the
+    /// full-resolution original, but on feed-style sites also a lot of images
+    /// belonging to other posts.
+    let isFromSourceOnly: Bool
 
     var formatLabel: String {
         switch url.pathExtension.lowercased() {

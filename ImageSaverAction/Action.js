@@ -6,7 +6,11 @@ Action.prototype = {
         var seen = {};
         var images = [];
 
-        function addURL(url, width, height) {
+        // origin is "dom" for something the page actually renders, or
+        // "source" for a URL only found in the markup text. Feed-style sites
+        // keep many unrelated images in their payload, so the UI hides the
+        // latter unless asked for.
+        function addURL(url, width, height, origin) {
             if (!url) { return; }
             url = String(url).trim();
             if (!url || url.indexOf("data:") === 0) { return; }
@@ -17,7 +21,12 @@ Action.prototype = {
             }
             if (seen[url]) { return; }
             seen[url] = true;
-            images.push({ url: url, width: width || 0, height: height || 0 });
+            images.push({
+                url: url,
+                width: width || 0,
+                height: height || 0,
+                origin: origin || "dom"
+            });
         }
 
         // Picks the highest-resolution candidate. Srcset order is not defined by
@@ -179,7 +188,7 @@ Action.prototype = {
             var hit;
             var found = 0;
             while ((hit = IMAGE_URL.exec(html)) !== null && found < 800) {
-                addURL(hit[0], 0, 0);
+                addURL(hit[0], 0, 0, "source");
                 found++;
             }
         } catch (e) {}

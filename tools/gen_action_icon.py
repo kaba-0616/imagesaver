@@ -49,35 +49,67 @@ def dist_to_segment(px, py, a, b):
     return math.hypot(px - (ax + dx * t), py - (ay + dy * t))
 
 
-def render(size, segs):
+
+
+MASTER = 1024
+
+
+def render_master(segs, size=MASTER):
+    """Analytic coverage: alpha falls off over roughly one pixel at the edge."""
     half = STROKE / 2
-    # Cheap rejection: a pixel far from every segment's bounding box is empty.
     boxes = [(min(a[0], b[0]) - half, min(a[1], b[1]) - half,
               max(a[0], b[0]) + half, max(a[1], b[1]) + half) for a, b in segs]
 
     rows = []
     for py in range(size):
-        row = bytearray()
+        y = (py + 0.5) / size
+        row = [0] * size
         for px in range(size):
-            hits = 0
-            for sy in range(SS):
-                for sx in range(SS):
-                    x = (px + (sx + 0.5) / SS) / size
-                    y = (py + (sy + 0.5) / SS) / size
-                    for (a, b), (x0, y0, x1, y1) in zip(segs, boxes):
-                        if x < x0 or x > x1 or y < y0 or y > y1:
-                            continue
-                        if dist_to_segment(x, y, a, b) <= half:
-                            hits += 1
-                            break
-            alpha = round(255 * hits / (SS * SS))
-            row += bytes((0, 0, 0, alpha))
-        rows.append(bytes(row))
+            x = (px + 0.5) / size
+            best = 1e9
+            for (a, b), (x0, y0, x1, y1) in zip(segs, boxes):
+                if x < x0 or x > x1 or y < y0 or y > y1:
+                    continue
+                d = dist_to_segment(x, y, a, b)
+                if d < best:
+                    best = d
+                    if d <= 0:
+                        break
+            if best < 1e8:
+                cov = (half - best) * size + 0.5
+                row[px] = max(0, min(255, round(cov * 255)))
+        rows.append(row)
     return rows
 
 
-def write_png(path, size, rows):
-    raw = b"".join(b"\x00" + r for r in rows)
+def downsample(master, target):
+    """Area-average the master's alpha down to `target` pixels square."""
+    n = len(master)
+    step = n / target
+    out = []
+    for ty in range(target):
+        y0, y1 = int(ty * step), max(int(ty * step) + 1, int((ty + 1) * step))
+        row = []
+        for tx in range(target):
+            x0, x1 = int(tx * step), max(int(tx * step) + 1, int((tx + 1) * step))
+            total = count = 0
+            for y in range(y0, min(y1, n)):
+                src = master[y]
+                for x in range(x0, min(x1, n)):
+                    total += src[x]
+                    count += 1
+            row.append(round(total / count) if count else 0)
+        out.append(row)
+    return out
+
+
+def write_png(path, alpha_rows):
+    size = len(alpha_rows)
+    raw = bytearray()
+    for row in alpha_rows:
+        raw.append(0)
+        for a in row:
+            raw += bytes((0, 0, 0, a))
 
     def chunk(tag, data):
         c = tag + data
@@ -85,16 +117,62 @@ def write_png(path, size, rows):
 
     png = (b"\x89PNG\r\n\x1a\n"
            + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
-           + chunk(b"IDAT", zlib.compress(raw, 9))
+           + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
            + chunk(b"IEND", b""))
     with open(path, "wb") as f:
         f.write(png)
 
 
-if __name__ == "__main__":
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
-                       "ImageSaverAction", "Assets.xcassets", "ActionIcon.imageset")
+# The share sheet takes an action extension's icon from its *app icon set*, so
+# the extension needs the full iOS slot list -- an imageset is ignored.
+APPICON_SLOTS = [
+    ("iphone", "20x20", "2x", 40), ("iphone", "20x20", "3x", 60),
+    ("iphone", "29x29", "2x", 58), ("iphone", "29x29", "3x", 87),
+    ("iphone", "40x40", "2x", 80), ("iphone", "40x40", "3x", 120),
+    ("iphone", "60x60", "2x", 120), ("iphone", "60x60", "3x", 180),
+    ("ipad", "20x20", "1x", 20), ("ipad", "20x20", "2x", 40),
+    ("ipad", "29x29", "1x", 29), ("ipad", "29x29", "2x", 58),
+    ("ipad", "40x40", "1x", 40), ("ipad", "40x40", "2x", 80),
+    ("ipad", "76x76", "1x", 76), ("ipad", "76x76", "2x", 152),
+    ("ipad", "83.5x83.5", "2x", 167),
+    ("ios-marketing", "1024x1024", "1x", 1024),
+]
+
+
+def main():
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
+                        "ImageSaverAction", "Assets.xcassets")
     segs = build_glyph()
+    print("rendering %dx%d master..." % (MASTER, MASTER))
+    master = render_master(segs)
+
+    cache = {MASTER: master}
+
+    def at(size):
+        if size not in cache:
+            cache[size] = downsample(master, size)
+        return cache[size]
+
+    imageset = os.path.join(root, "ActionIcon.imageset")
+    os.makedirs(imageset, exist_ok=True)
     for size in (60, 120, 180):
-        write_png(os.path.join(out, "action-%d.png" % size), size, render(size, segs))
-        print("wrote action-%d.png" % size)
+        write_png(os.path.join(imageset, "action-%d.png" % size), at(size))
+    print("wrote ActionIcon.imageset")
+
+    appicon = os.path.join(root, "AppIcon.appiconset")
+    os.makedirs(appicon, exist_ok=True)
+    entries = []
+    for idiom, sizes, scale, px in APPICON_SLOTS:
+        name = "icon-%d.png" % px
+        write_png(os.path.join(appicon, name), at(px))
+        entries.append('    {\n      "filename" : "%s",\n      "idiom" : "%s",\n'
+                       '      "scale" : "%s",\n      "size" : "%s"\n    }'
+                       % (name, idiom, scale, sizes))
+    with open(os.path.join(appicon, "Contents.json"), "w") as f:
+        f.write('{\n  "images" : [\n' + ",\n".join(entries)
+                + '\n  ],\n  "info" : {\n    "author" : "xcode",\n    "version" : 1\n  }\n}\n')
+    print("wrote AppIcon.appiconset (%d slots)" % len(APPICON_SLOTS))
+
+
+if __name__ == "__main__":
+    main()
