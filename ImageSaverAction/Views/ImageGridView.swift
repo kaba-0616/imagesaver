@@ -12,11 +12,13 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
 
+    /// Menu wording. The pixel threshold is kept as a hint so the tiers are
+    /// not purely relative.
     var label: String {
         switch self {
         case .all: return "すべて表示"
-        case .medium: return "100px未満を除外"
-        case .large: return "300px未満を除外"
+        case .medium: return "小を除外 (100px未満)"
+        case .large: return "中・小を除外 (300px未満)"
         }
     }
 }
@@ -152,19 +154,6 @@ struct ImageGridView: View {
                                 }
                             }
                         }
-
-                        if hasSourceOnlyImages {
-                            Divider()
-                            Button {
-                                includeSourceOnly.toggle()
-                            } label: {
-                                if includeSourceOnly {
-                                    Label("ソース内の画像も表示", systemImage: "checkmark")
-                                } else {
-                                    Text("ソース内の画像も表示")
-                                }
-                            }
-                        }
                     } label: {
                         // Filled while anything is being held back, so hidden
                         // images are discoverable without opening the menu.
@@ -235,6 +224,20 @@ struct ImageGridView: View {
                     .foregroundColor(statusIsError ? .red : .gray)
                     .lineLimit(1)
                 Spacer()
+
+                // Instagram-style carousels keep only the visible slide and its
+                // neighbours in the DOM; the rest of the post lives in the page
+                // payload. Buried in the filter menu that was undiscoverable,
+                // so the count sits here instead.
+                if sourceOnlyCount > 0 {
+                    Button(includeSourceOnly
+                           ? "ソース内を隠す"
+                           : "ソース内 +\(sourceOnlyCount)") {
+                        includeSourceOnly.toggle()
+                    }
+                    .font(.system(size: 11))
+                }
+
                 // Always available: the previous run's log persists even if the
                 // extension was killed before the result could be shown.
                 Button("ログ") { showLogSheet = true }
@@ -274,13 +277,13 @@ struct ImageGridView: View {
     }
 
     private var hasHiddenImages: Bool {
-        sizeFilter != .all || (!includeSourceOnly && hasSourceOnlyImages)
+        sizeFilter != .all
     }
 
-    /// Only worth offering the toggle when the deeper scan actually found
-    /// something the page does not render itself.
-    private var hasSourceOnlyImages: Bool {
-        images.contains { $0.isFromSourceOnly }
+    /// How many images the deeper scan found that the page does not render
+    /// itself. Zero means there is nothing to offer and no toggle to show.
+    private var sourceOnlyCount: Int {
+        images.filter { $0.isFromSourceOnly && !photoSaver.savedImageIDs.contains($0.id) }.count
     }
 
     private var statusText: String {
