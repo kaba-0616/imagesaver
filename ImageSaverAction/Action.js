@@ -149,55 +149,148 @@ Action.prototype = {
             }
         }
 
-        try { scanRoot(document); } catch (e) {}
+        function collectRendered() {
+            try { scanRoot(document); } catch (e) {}
 
-        var frames = document.querySelectorAll("iframe, frame");
-        for (var f = 0; f < frames.length; f++) {
-            try {
-                var doc = frames[f].contentDocument;
-                if (doc) { scanRoot(doc); }
-            } catch (e) {
-                // Cross-origin frame: nothing readable, skip.
+            var frames = document.querySelectorAll("iframe, frame");
+            for (var f = 0; f < frames.length; f++) {
+                try {
+                    var doc = frames[f].contentDocument;
+                    if (doc) { scanRoot(doc); }
+                } catch (e) {
+                    // Cross-origin frame: nothing readable, skip.
+                }
             }
         }
 
-        // --- Raw-source scan ---
-        // Single-page apps (Next.js, Nuxt) ship their image URLs inside inline
-        // JSON and only turn some of them into elements. Sweeping the markup
-        // text finds the full-resolution originals the DOM never references.
+        collectRendered();
 
-        try {
-            // Built from a backslash constant rather than written inline: the
-            // patterns below are dense with escapes and easy to corrupt.
-            var BS = String.fromCharCode(92);
+        function collectSource() {
+            // --- Raw-source scan ---
+            // Single-page apps (Next.js, Nuxt) ship their image URLs inside inline
+            // JSON and only turn some of them into elements. Sweeping the markup
+            // text finds the full-resolution originals the DOM never references.
 
-            // Inline JSON escapes its slashes; undo both spellings.
-            var html = document.documentElement.innerHTML
-                .split(BS + "u002F").join("/")
-                .split(BS + "u002f").join("/")
-                .split(BS + "/").join("/");
+            try {
+                // Built from a backslash constant rather than written inline: the
+                // patterns below are dense with escapes and easy to corrupt.
+                var BS = String.fromCharCode(92);
 
-            // Characters a URL cannot contain: whitespace, the three quote
-            // styles, brackets and braces.
-            var QUOTES = String.fromCharCode(34) + String.fromCharCode(39) + String.fromCharCode(96);
-            var CLASS = "[^" + BS + "s" + QUOTES + "<>{}" + BS + "[" + BS + "]]";
-            var IMAGE_URL = new RegExp(
-                "https?://" + CLASS + "+?" + BS + ".(?:jpe?g|png|gif|webp|heic|heif|bmp|svg|avif)" +
-                "(?:" + BS + "?" + CLASS + "*)?", "gi");
+                // Inline JSON escapes its slashes; undo both spellings.
+                var html = document.documentElement.innerHTML
+                    .split(BS + "u002F").join("/")
+                    .split(BS + "u002f").join("/")
+                    .split(BS + "/").join("/");
 
-            var hit;
-            var found = 0;
-            while ((hit = IMAGE_URL.exec(html)) !== null && found < 800) {
-                addURL(hit[0], 0, 0, "source");
-                found++;
+                // Characters a URL cannot contain: whitespace, the three quote
+                // styles, brackets and braces.
+                var QUOTES = String.fromCharCode(34) + String.fromCharCode(39) + String.fromCharCode(96);
+                var CLASS = "[^" + BS + "s" + QUOTES + "<>{}" + BS + "[" + BS + "]]";
+                var IMAGE_URL = new RegExp(
+                    "https?://" + CLASS + "+?" + BS + ".(?:jpe?g|png|gif|webp|heic|heif|bmp|svg|avif)" +
+                    "(?:" + BS + "?" + CLASS + "*)?", "gi");
+
+                var hit;
+                var found = 0;
+                while ((hit = IMAGE_URL.exec(html)) !== null && found < 800) {
+                    addURL(hit[0], 0, 0, "source");
+                    found++;
+                }
+            } catch (e) {}
+
+        }
+
+        // --- Carousel advance ---
+        // Instagram and similar galleries keep only the visible slide and its
+        // immediate neighbours in the DOM, and fetch the rest over the network
+        // as you swipe -- they exist nowhere in the markup to be scraped. The
+        // preprocessing script may finish asynchronously, so step the carousel
+        // forward and let the page load them.
+
+        var finished = false;
+
+        function finish() {
+            if (finished) { return; }
+            finished = true;
+            collectRendered();
+            collectSource();
+            params.completionFunction({
+                "images": images,
+                "pageTitle": document.title || "",
+                "pageURL": document.URL || ""
+            });
+        }
+
+        var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
+
+        function findNextControl() {
+            var candidates = document.querySelectorAll("[aria-label]");
+            for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                var label = (el.getAttribute("aria-label") || "").trim();
+                if (!NEXT_LABEL.test(label)) { continue; }
+                var role = (el.getAttribute("role") || "").toLowerCase();
+                if (el.tagName !== "BUTTON" && role !== "button") { continue; }
+                // Never click a link: "next" on an article or a paginated list
+                // navigates away, which would abandon the extraction entirely.
+                if (el.tagName === "A" || el.closest("a")) { continue; }
+                // offsetParent is null for anything hidden or detached.
+                if (!el.offsetParent) { continue; }
+                return el;
             }
-        } catch (e) {}
+            return null;
+        }
 
-        params.completionFunction({
-            "images": images,
-            "pageTitle": document.title || "",
-            "pageURL": document.URL || ""
-        });
+        // Kept short: the share sheet is blocked on this script, and WebKit
+        // will not let it run indefinitely.
+        var MAX_STEPS = 20;
+        var STEP_DELAY = 400;
+        var deadline = Date.now() + 6500;
+        var startURL = document.URL;
+        var steps = 0;
+        var idleSteps = 0;
+
+        function step() {
+            if (finished || steps >= MAX_STEPS || Date.now() > deadline) {
+                finish();
+                return;
+            }
+            var control = findNextControl();
+            if (!control) {
+                finish();
+                return;
+            }
+
+            var before = images.length;
+            try {
+                control.click();
+            } catch (e) {
+                finish();
+                return;
+            }
+            steps++;
+
+            setTimeout(function() {
+                if (finished) { return; }
+                // A click that navigated is a misidentified control; take what
+                // was gathered before the page changed under us.
+                if (document.URL !== startURL) { finish(); return; }
+                collectRendered();
+                // Two dead steps in a row means the gallery has wrapped around
+                // or stopped producing anything new.
+                idleSteps = (images.length === before) ? idleSteps + 1 : 0;
+                if (idleSteps >= 2) {
+                    finish();
+                } else {
+                    step();
+                }
+            }, STEP_DELAY);
+        }
+
+        // Backstop: the extension would hang forever if completionFunction
+        // never ran, so guarantee it does.
+        setTimeout(finish, 7500);
+        step();
     },
 
     finalize: function(params) {}
