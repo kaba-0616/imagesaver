@@ -158,6 +158,17 @@ struct ImageGridView: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .automatic))
+        // A vertical flick (up or down) drops back to the grid. Attached as a
+        // simultaneous gesture so the TabView keeps its own horizontal paging.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in
+                    let vertical = value.translation.height
+                    let horizontal = value.translation.width
+                    guard abs(vertical) > 70, abs(vertical) > abs(horizontal) * 1.5 else { return }
+                    withAnimation { displayMode = .grid }
+                }
+        )
     }
 
     private var bottomBar: some View {
