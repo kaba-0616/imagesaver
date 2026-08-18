@@ -291,7 +291,13 @@ Action.prototype = {
         var MAX_STEPS = 20;
         var STEP_DELAY = 400;
         var deadline = Date.now() + 6500;
-        var startURL = document.URL;
+        // Compared without the query string: galleries commonly push the
+        // slide number into it (Instagram uses ?img_index=N), which is not a
+        // navigation and must not abort the walk.
+        function pageIdentity() {
+            return document.location.origin + document.location.pathname;
+        }
+        var startIdentity = pageIdentity();
         var steps = 0;
         var idleSteps = 0;
 
@@ -327,8 +333,8 @@ Action.prototype = {
                 if (finished) { return; }
                 // A click that navigated is a misidentified control; take what
                 // was gathered before the page changed under us.
-                if (document.URL !== startURL) {
-                    note("[ERR] クリックでページが遷移したため中断");
+                if (pageIdentity() !== startIdentity) {
+                    note("[ERR] クリックでページが遷移したため中断: " + pageIdentity());
                     finish();
                     return;
                 }
