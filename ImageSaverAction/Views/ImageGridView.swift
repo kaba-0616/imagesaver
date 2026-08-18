@@ -158,6 +158,26 @@ struct ImageGridView: View {
                                 }
                             }
                         }
+
+                        Divider()
+
+                        // Always present, even at zero: otherwise a missing
+                        // entry is indistinguishable from the scan having
+                        // found nothing.
+                        if sourceOnlyCount > 0 {
+                            Button {
+                                includeSourceOnly.toggle()
+                            } label: {
+                                if includeSourceOnly {
+                                    Label("ソース内の画像も表示 (\(sourceOnlyCount)件)",
+                                          systemImage: "checkmark")
+                                } else {
+                                    Text("ソース内の画像も表示 (\(sourceOnlyCount)件)")
+                                }
+                            }
+                        } else {
+                            Text("ソース内の画像: なし")
+                        }
                     } label: {
                         // Filled while anything is being held back, so hidden
                         // images are discoverable without opening the menu.
