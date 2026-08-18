@@ -4,7 +4,9 @@ import ImageIO
 @MainActor
 final class ImageLoader: ObservableObject {
 
-    static let shared = ImageLoader()
+    // Deliberately not a singleton: the extension process is reused across
+    // pages, and a shared cache keyed by index would show the previous page's
+    // images in the new page's tiles.
 
     @Published private(set) var thumbnails: [Int: UIImage] = [:]
     @Published private(set) var fullImages: [Int: UIImage] = [:]

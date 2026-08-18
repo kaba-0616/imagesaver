@@ -47,7 +47,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "14"
+        CURRENT_PROJECT_VERSION: "15"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: ImageSaverAction
@@ -69,7 +69,11 @@ targets:
           NSExtensionPointIdentifier: com.apple.ui-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ActionViewController
           NSExtensionAttributes:
-            NSExtensionActivationRule: TRUEPREDICATE
+            # Web pages only. A blanket TRUEPREDICATE makes the action appear in
+            # every app's share sheet, and iOS then treats its pinned position as
+            # global rather than per-app.
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebPageWithMaxCount: 1
             NSExtensionJavaScriptPreprocessingFile: Action
         NSPhotoLibraryAddUsageDescription: "選択した画像をカメラロールに保存するために使用します。"
         CFBundleIcons:
@@ -79,7 +83,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2.action
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "14"
+        CURRENT_PROJECT_VERSION: "15"
         SKIP_INSTALL: true
     dependencies:
       - package: SwiftDraw

@@ -26,7 +26,7 @@ struct ImageGridView: View {
     let pageTitle: String
     let onClose: () -> Void
 
-    @StateObject private var loader = ImageLoader.shared
+    @StateObject private var loader = ImageLoader()
     @StateObject private var photoSaver = PhotoSaver()
 
     @State private var selected: Set<Int> = []
@@ -288,13 +288,27 @@ private struct ThumbnailCell: View {
 
     private var selectionButton: some View {
         Button(action: onToggleSelect) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 22))
-                .symbolRenderingModeIfAvailable()
-                .foregroundColor(isSelected ? .accentColor : Color.white.opacity(0.85))
-                .shadow(radius: 2)
-                .padding(5)
+            ZStack {
+                // Opaque disc behind the glyph so the state stays legible over
+                // bright, busy, or white thumbnails.
+                Circle()
+                    .fill(isSelected ? Color.accentColor : Color.black.opacity(0.55))
+                    .frame(width: 24, height: 24)
+
+                Circle()
+                    .strokeBorder(Color.white, lineWidth: 1.5)
+                    .frame(width: 24, height: 24)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.white)
+                }
+            }
+            .shadow(color: .black.opacity(0.5), radius: 2)
+            .padding(6)
         }
+        .buttonStyle(.plain)
     }
 
     private var badgeText: String {
@@ -306,16 +320,6 @@ private struct ThumbnailCell: View {
             return "\(image.formatLabel) \(image.width)×\(image.height)"
         }
         return image.formatLabel
-    }
-}
-
-private extension View {
-    // Keeps the checkmark readable over both light and dark thumbnails.
-    func symbolRenderingModeIfAvailable() -> some View {
-        if #available(iOS 15.0, *) {
-            return AnyView(self.symbolRenderingMode(.hierarchical))
-        }
-        return AnyView(self)
     }
 }
 

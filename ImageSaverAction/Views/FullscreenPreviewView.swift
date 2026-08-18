@@ -38,12 +38,25 @@ struct FullscreenPreviewView: View {
                 .onAppear { loader.requestFullImage(for: image) }
 
             Button(action: onToggleSelect) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 28))
-                    .foregroundColor(isSelected ? .accentColor : .white)
-                    .background(Circle().fill(Color.black.opacity(0.4)))
-                    .padding()
+                ZStack {
+                    Circle()
+                        .fill(isSelected ? Color.accentColor : Color.black.opacity(0.55))
+                        .frame(width: 34, height: 34)
+
+                    Circle()
+                        .strokeBorder(Color.white, lineWidth: 2)
+                        .frame(width: 34, height: 34)
+
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundColor(.white)
+                    }
+                }
+                .shadow(color: .black.opacity(0.5), radius: 3)
+                .padding()
             }
+            .buttonStyle(.plain)
 
             VStack {
                 Spacer()
