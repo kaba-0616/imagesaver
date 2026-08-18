@@ -56,6 +56,8 @@ struct ImageGridView: View {
         // No modal result popup: progress and outcome are shown inline in the
         // bottom status line, and details are available via the log sheet.
         mainContent
+            .overlay(savingOverlay)
+            .animation(.easeInOut(duration: 0.15), value: photoSaver.isSaving)
             .preferredColorScheme(.dark)
             .sheet(isPresented: $showLogSheet) {
                 LogSheet(
@@ -63,6 +65,35 @@ struct ImageGridView: View {
                     previousLog: PersistentLog.read()
                 ) { showLogSheet = false }
             }
+    }
+
+    /// Shown while a save is in flight. Saving several full-size images takes
+    /// long enough that the bottom status line alone reads as a frozen screen.
+    @ViewBuilder
+    private var savingOverlay: some View {
+        if case .saving(let done, let total) = photoSaver.state {
+            ZStack {
+                Color.black.opacity(0.5).ignoresSafeArea()
+
+                VStack(spacing: 14) {
+                    ProgressView()
+                        .scaleEffect(1.4)
+                        .tint(.white)
+                    Text("保存中 \(done)/\(total)")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                }
+                .padding(28)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color(white: 0.16))
+                )
+            }
+            // Swallows taps so the selection cannot change mid-save.
+            .contentShape(Rectangle())
+            .onTapGesture {}
+            .transition(.opacity)
+        }
     }
 
     private var mainContent: some View {

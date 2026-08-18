@@ -18,6 +18,11 @@ final class PhotoSaver: ObservableObject {
     }
 
     @Published private(set) var state: SaveState = .idle
+
+    var isSaving: Bool {
+        if case .saving = state { return true }
+        return false
+    }
     /// Human-readable trace of the last save run, surfaced in the UI so problems
     /// are diagnosable on-device (an extension has no console to check).
     @Published private(set) var log: [LogEntry] = []
