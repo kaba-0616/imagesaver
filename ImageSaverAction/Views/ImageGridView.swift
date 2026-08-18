@@ -26,6 +26,9 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
 struct ImageGridView: View {
     let images: [PageImage]
     let pageTitle: String
+    /// What the page-extraction script did and found. Nothing on the device can
+    /// debug that script, so it reports on itself and the result lands here.
+    let extractionLog: [String]
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -63,6 +66,7 @@ struct ImageGridView: View {
             .preferredColorScheme(.dark)
             .sheet(isPresented: $showLogSheet) {
                 LogSheet(
+                    extractionLog: extractionLog,
                     currentLog: photoSaver.log,
                     previousLog: PersistentLog.read()
                 ) { showLogSheet = false }
@@ -401,6 +405,7 @@ private struct ThumbnailCell: View {
 }
 
 private struct LogSheet: View {
+    let extractionLog: [String]
     let currentLog: [PhotoSaver.LogEntry]
     let previousLog: [String]
     let onClose: () -> Void
@@ -409,6 +414,14 @@ private struct LogSheet: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    if !extractionLog.isEmpty {
+                        section(title: "読み込み") {
+                            ForEach(Array(extractionLog.enumerated()), id: \.offset) { _, text in
+                                line(text, isError: text.hasPrefix("[ERR]"))
+                            }
+                        }
+                    }
+
                     if !currentLog.isEmpty {
                         section(title: "今回の保存") {
                             ForEach(currentLog) { entry in
@@ -425,7 +438,7 @@ private struct LogSheet: View {
                         }
                     }
 
-                    if currentLog.isEmpty && previousLog.isEmpty {
+                    if extractionLog.isEmpty && currentLog.isEmpty && previousLog.isEmpty {
                         Text("まだ記録がありません")
                             .foregroundColor(.secondary)
                     }
@@ -450,6 +463,10 @@ private struct LogSheet: View {
 
     private var allLogText: String {
         var lines: [String] = []
+        if !extractionLog.isEmpty {
+            lines.append("=== 読み込み ===")
+            lines.append(contentsOf: extractionLog)
+        }
         if !currentLog.isEmpty {
             lines.append("=== 今回の保存 ===")
             lines.append(contentsOf: currentLog.map { ($0.isError ? "[ERR] " : "") + $0.text })

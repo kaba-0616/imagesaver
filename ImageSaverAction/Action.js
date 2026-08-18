@@ -6,6 +6,14 @@ Action.prototype = {
         var seen = {};
         var images = [];
 
+        // Extraction trace, surfaced in the app's log sheet. There is no way to
+        // attach a debugger to this script on a device, so it has to report on
+        // itself when a page yields fewer images than expected.
+        var trace = [];
+        function note(text) {
+            trace.push(text);
+        }
+
         // origin is "dom" for something the page actually renders, or
         // "source" for a URL only found in the markup text. Feed-style sites
         // keep many unrelated images in their payload, so the UI hides the
@@ -164,6 +172,9 @@ Action.prototype = {
         }
 
         collectRendered();
+        note("URL: " + document.URL);
+        note("img要素 " + document.querySelectorAll("img").length
+             + "個 / 初回スキャン " + images.length + "件");
 
         function collectSource() {
             // --- Raw-source scan ---
@@ -192,11 +203,16 @@ Action.prototype = {
 
                 var hit;
                 var found = 0;
+                var beforeSource = images.length;
                 while ((hit = IMAGE_URL.exec(html)) !== null && found < 800) {
                     addURL(hit[0], 0, 0, "source");
                     found++;
                 }
-            } catch (e) {}
+                note("ソース走査: HTML " + html.length + "文字 / 一致 " + found
+                     + "件 / 新規 " + (images.length - beforeSource) + "件");
+            } catch (e) {
+                note("[ERR] ソース走査に失敗: " + e);
+            }
 
         }
 
@@ -214,10 +230,12 @@ Action.prototype = {
             finished = true;
             collectRendered();
             collectSource();
+            note("合計 " + images.length + "件");
             params.completionFunction({
                 "images": images,
                 "pageTitle": document.title || "",
-                "pageURL": document.URL || ""
+                "pageURL": document.URL || "",
+                "trace": trace
             });
         }
 
@@ -225,20 +243,47 @@ Action.prototype = {
 
         function findNextControl() {
             var candidates = document.querySelectorAll("[aria-label]");
+            var rejected = [];
             for (var i = 0; i < candidates.length; i++) {
                 var el = candidates[i];
                 var label = (el.getAttribute("aria-label") || "").trim();
                 if (!NEXT_LABEL.test(label)) { continue; }
                 var role = (el.getAttribute("role") || "").toLowerCase();
-                if (el.tagName !== "BUTTON" && role !== "button") { continue; }
+                if (el.tagName !== "BUTTON" && role !== "button") {
+                    rejected.push(label + "(" + el.tagName + "/role=" + (role || "なし") + ")");
+                    continue;
+                }
                 // Never click a link: "next" on an article or a paginated list
                 // navigates away, which would abandon the extraction entirely.
-                if (el.tagName === "A" || el.closest("a")) { continue; }
+                if (el.tagName === "A" || el.closest("a")) {
+                    rejected.push(label + "(リンク内)");
+                    continue;
+                }
                 // offsetParent is null for anything hidden or detached.
-                if (!el.offsetParent) { continue; }
+                if (!el.offsetParent) {
+                    rejected.push(label + "(非表示)");
+                    continue;
+                }
                 return el;
             }
+            if (rejected.length) {
+                note("「次へ」候補を除外: " + rejected.slice(0, 5).join(", "));
+            }
             return null;
+        }
+
+        /// Dumps what the page does expose, for when no control matched at all.
+        function noteAvailableControls() {
+            var labels = [];
+            var els = document.querySelectorAll("button, [role='button'], [aria-label]");
+            for (var i = 0; i < els.length && labels.length < 25; i++) {
+                var el = els[i];
+                var label = (el.getAttribute("aria-label") || el.textContent || "").trim();
+                if (!label || label.length > 24) { continue; }
+                if (labels.indexOf(label) === -1) { labels.push(label); }
+            }
+            note("ボタン候補 " + els.length + "個: "
+                 + (labels.length ? labels.join(" / ") : "ラベルなし"));
         }
 
         // Kept short: the share sheet is blocked on this script, and WebKit
@@ -251,12 +296,20 @@ Action.prototype = {
         var idleSteps = 0;
 
         function step() {
-            if (finished || steps >= MAX_STEPS || Date.now() > deadline) {
+            if (finished) { return; }
+            if (steps >= MAX_STEPS || Date.now() > deadline) {
+                note("上限に達したため終了 (" + steps + "回送り)");
                 finish();
                 return;
             }
             var control = findNextControl();
             if (!control) {
+                if (steps === 0) {
+                    note("「次へ」ボタンが見つからず、カルーセル送りは未実行");
+                    noteAvailableControls();
+                } else {
+                    note("「次へ」ボタンが消えたため終了 (" + steps + "回送り)");
+                }
                 finish();
                 return;
             }
@@ -274,12 +327,18 @@ Action.prototype = {
                 if (finished) { return; }
                 // A click that navigated is a misidentified control; take what
                 // was gathered before the page changed under us.
-                if (document.URL !== startURL) { finish(); return; }
+                if (document.URL !== startURL) {
+                    note("[ERR] クリックでページが遷移したため中断");
+                    finish();
+                    return;
+                }
                 collectRendered();
+                note("送り" + steps + "回目: +" + (images.length - before) + "件");
                 // Two dead steps in a row means the gallery has wrapped around
                 // or stopped producing anything new.
                 idleSteps = (images.length === before) ? idleSteps + 1 : 0;
                 if (idleSteps >= 2) {
+                    note("新規が増えなくなったため終了");
                     finish();
                 } else {
                     step();

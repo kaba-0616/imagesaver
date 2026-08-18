@@ -15,7 +15,7 @@ final class ActionViewController: UIViewController {
         view.addSubview(loading.view)
         loading.didMove(toParent: self)
 
-        extractJavaScriptResults { [weak self] images, pageTitle, pageURL in
+        extractJavaScriptResults { [weak self] images, pageTitle, pageURL, trace in
             guard let self else { return }
 
             HistoryStore.recordVisit(pageURL: pageURL, pageTitle: pageTitle, imageCount: images.count)
@@ -27,6 +27,7 @@ final class ActionViewController: UIViewController {
             let rootView = ImageGridView(
                 images: images,
                 pageTitle: pageTitle,
+                extractionLog: trace,
                 onClose: { [weak self] in
                     self?.extensionContext?.completeRequest(returningItems: nil)
                 }
@@ -42,11 +43,18 @@ final class ActionViewController: UIViewController {
     }
 
     private func extractJavaScriptResults(
-        completion: @escaping (_ images: [PageImage], _ pageTitle: String, _ pageURL: String) -> Void
+        completion: @escaping (
+            _ images: [PageImage],
+            _ pageTitle: String,
+            _ pageURL: String,
+            _ trace: [String]
+        ) -> Void
     ) {
         guard let item = extensionContext?.inputItems.first as? NSExtensionItem,
               let attachments = item.attachments else {
-            DispatchQueue.main.async { completion([], "", "") }
+            DispatchQueue.main.async {
+                completion([], "", "", ["[ERR] 共有元からデータを受け取れませんでした"])
+            }
             return
         }
 
@@ -55,7 +63,9 @@ final class ActionViewController: UIViewController {
         }
 
         guard !providers.isEmpty else {
-            DispatchQueue.main.async { completion([], "", "") }
+            DispatchQueue.main.async {
+                completion([], "", "", ["[ERR] ページの解析結果が添付されていません"])
+            }
             return
         }
 
@@ -77,6 +87,10 @@ final class ActionViewController: UIViewController {
             let pageTitle = resultDict?["pageTitle"] as? String ?? ""
             let pageURL = resultDict?["pageURL"] as? String ?? ""
             let rawImages = resultDict?["images"] as? [[String: Any]] ?? []
+            var trace = resultDict?["trace"] as? [String] ?? []
+            if resultDict == nil {
+                trace.append("[ERR] 抽出スクリプトの結果が空でした")
+            }
 
             var images: [PageImage] = []
             images.reserveCapacity(rawImages.count)
@@ -94,7 +108,11 @@ final class ActionViewController: UIViewController {
                 ))
             }
 
-            completion(images, pageTitle, pageURL)
+            let sourceOnly = images.filter(\.isFromSourceOnly).count
+            trace.append("受け取り \(images.count)件 "
+                         + "(ページ内 \(images.count - sourceOnly) / ソース内 \(sourceOnly))")
+
+            completion(images, pageTitle, pageURL, trace)
         }
     }
 }
