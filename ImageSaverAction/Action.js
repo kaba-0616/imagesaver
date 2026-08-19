@@ -329,13 +329,15 @@ Action.prototype = {
                  + (labels.length ? labels.join(" / ") : "ラベルなし"));
         }
 
-        // The share sheet is blocked on this script, so it cannot run
-        // indefinitely -- but 6.5s has been observed to work, and cutting the
-        // budget below that was a response to a misdiagnosis, not a real limit.
+        // Overrunning does not truncate the result -- it discards it, and
+        // loadItem hands the extension nil. Earlier budgets of 6.5s looked safe
+        // only because runs finished in ~1.4s and never spent them; the failures
+        // began exactly when added delays made the walk genuinely long. Keep
+        // total runtime near what has actually been observed to work.
         var MAX_STEPS = 25;
-        var POLL_INTERVAL = 120;
-        var MAX_STEP_WAIT = 900;
-        var SETTLE_DELAY = 600;
+        var POLL_INTERVAL = 100;
+        var MAX_STEP_WAIT = 500;
+        var SETTLE_DELAY = 300;
         // A slow slide should not end the walk: the control disappearing is the
         // reliable signal, so tolerate a few empty steps before giving up.
         var MAX_IDLE_STEPS = 3;
@@ -343,11 +345,11 @@ Action.prototype = {
         // so a missing button means "mid-transition" as often as "end of
         // gallery". Re-check before believing it, and leave a gap between
         // clicks so the next one is not swallowed by the animation.
-        var MAX_MISSING_CHECKS = 4;
-        var MISSING_RECHECK_DELAY = 250;
-        var MIN_STEP_GAP = 250;
+        var MAX_MISSING_CHECKS = 3;
+        var MISSING_RECHECK_DELAY = 150;
+        var MIN_STEP_GAP = 120;
         var startedAt = Date.now();
-        var deadline = startedAt + 6000;
+        var deadline = startedAt + 1800;
 
         // Compared without the query string: galleries commonly push the
         // slide number into it (Instagram uses ?img_index=N), which is not a
@@ -491,7 +493,7 @@ Action.prototype = {
 
         // Backstop: the extension would hang forever if completionFunction
         // never ran, so guarantee it does.
-        setTimeout(finish, 7500);
+        setTimeout(finish, 2500);
         step();
     },
 

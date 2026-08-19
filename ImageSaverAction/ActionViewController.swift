@@ -99,7 +99,11 @@ final class ActionViewController: UIViewController {
                     record("[ERR] 添付の読み取りに失敗: \(error.localizedDescription)")
                 }
                 guard let dict = item as? [String: Any] else {
-                    record("[ERR] 想定外の型: \(type(of: item))")
+                    // nil here means the page script never completed: an
+                    // overrunning script has its result discarded outright.
+                    record(item == nil
+                           ? "[ERR] 添付が nil (ページ側スクリプトが完了せず破棄された)"
+                           : "[ERR] 想定外の型: \(String(describing: item))")
                     group.leave()
                     return
                 }
