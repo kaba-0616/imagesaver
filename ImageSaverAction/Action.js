@@ -491,10 +491,33 @@ Action.prototype = {
             }, POLL_INTERVAL);
         }
 
-        // Backstop: the extension would hang forever if completionFunction
-        // never ran, so guarantee it does.
-        setTimeout(finish, 2500);
-        step();
+        // Clicking through a page is only worth its risk where the gallery is
+        // known to hide its slides from the DOM. Everywhere else this finishes
+        // synchronously, which also removes any chance of the result being
+        // discarded for running too long.
+        var CAROUSEL_HOSTS = ["instagram.com"];
+
+        function hostWalksCarousels() {
+            var host = (document.location.hostname || "").toLowerCase();
+            for (var i = 0; i < CAROUSEL_HOSTS.length; i++) {
+                var allowed = CAROUSEL_HOSTS[i];
+                if (host === allowed || host.slice(-(allowed.length + 1)) === "." + allowed) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if (!hostWalksCarousels()) {
+            note("カルーセル送りの対象サイトではないため実行しない ("
+                 + document.location.hostname + ")");
+            finish();
+        } else {
+            // Backstop: the extension would hang forever if completionFunction
+            // never ran, so guarantee it does.
+            setTimeout(finish, 2500);
+            step();
+        }
     },
 
     finalize: function(params) {}
