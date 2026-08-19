@@ -224,6 +224,23 @@ Action.prototype = {
         // forward and let the page load them.
 
         var finished = false;
+        var settling = false;
+
+        /// Ends the walk, but only after giving images requested by the last
+        /// step time to arrive. Without this the final slide is regularly lost:
+        /// the click lands, the gallery reports no more slides, and the run
+        /// ends while its image is still in flight.
+        function finishAfterSettle(reason) {
+            if (finished || settling) { return; }
+            settling = true;
+            note(reason);
+            setTimeout(function() {
+                var before = images.length;
+                collectRendered();
+                note("最終待機: +" + (images.length - before) + "件");
+                finish();
+            }, SETTLE_DELAY);
+        }
 
         function finish() {
             if (finished) { return; }
@@ -289,8 +306,9 @@ Action.prototype = {
         // Kept short: the share sheet is blocked on this script, and WebKit
         // will not let it run indefinitely.
         var MAX_STEPS = 20;
-        var STEP_DELAY = 400;
-        var deadline = Date.now() + 6500;
+        var STEP_DELAY = 500;
+        var SETTLE_DELAY = 800;
+        var deadline = Date.now() + 6800;
         // Compared without the query string: galleries commonly push the
         // slide number into it (Instagram uses ?img_index=N), which is not a
         // navigation and must not abort the walk.
@@ -304,8 +322,7 @@ Action.prototype = {
         function step() {
             if (finished) { return; }
             if (steps >= MAX_STEPS || Date.now() > deadline) {
-                note("上限に達したため終了 (" + steps + "回送り)");
-                finish();
+                finishAfterSettle("上限に達したため終了 (" + steps + "回送り)");
                 return;
             }
             var control = findNextControl();
@@ -313,10 +330,11 @@ Action.prototype = {
                 if (steps === 0) {
                     note("「次へ」ボタンが見つからず、カルーセル送りは未実行");
                     noteAvailableControls();
+                    finish();
                 } else {
-                    note("「次へ」ボタンが消えたため終了 (" + steps + "回送り)");
+                    finishAfterSettle("「次へ」ボタンが消えたため終了 ("
+                                      + steps + "回送り)");
                 }
-                finish();
                 return;
             }
 
@@ -344,8 +362,7 @@ Action.prototype = {
                 // or stopped producing anything new.
                 idleSteps = (images.length === before) ? idleSteps + 1 : 0;
                 if (idleSteps >= 2) {
-                    note("新規が増えなくなったため終了");
-                    finish();
+                    finishAfterSettle("新規が増えなくなったため終了");
                 } else {
                     step();
                 }
@@ -354,7 +371,7 @@ Action.prototype = {
 
         // Backstop: the extension would hang forever if completionFunction
         // never ran, so guarantee it does.
-        setTimeout(finish, 7500);
+        setTimeout(finish, 9000);
         step();
     },
 
