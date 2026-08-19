@@ -7,8 +7,11 @@ enum DisplayMode: String, CaseIterable {
 
 enum SizeFilter: Int, CaseIterable, Identifiable {
     case all = 0
-    case medium = 100
-    case large = 300
+    // 250 clears site furniture -- favicons, avatars and app-badge artwork top
+    // out around 180. 700 additionally drops thumbnail-grade copies, leaving
+    // camera-resolution originals.
+    case medium = 250
+    case large = 700
 
     var id: Int { rawValue }
 
@@ -17,8 +20,8 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .all: return "すべて表示"
-        case .medium: return "小を除外 (100px未満)"
-        case .large: return "中・小を除外 (300px未満)"
+        case .medium: return "小を除外 (250px未満)"
+        case .large: return "中・小を除外 (700px未満)"
         }
     }
 }
@@ -50,9 +53,21 @@ struct ImageGridView: View {
             guard !photoSaver.savedImageIDs.contains(image.id) else { return false }
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard sizeFilter != .all else { return true }
-            let known = max(image.width, image.height)
+            let known = longestSide(of: image)
             return known == 0 || known >= sizeFilter.rawValue
         }
+    }
+
+    /// Prefers the real pixel size read from the downloaded file. Many images
+    /// are found through tags that carry no dimensions (apple-touch-icon, meta,
+    /// preload), so the DOM's own numbers are 0 for exactly the site furniture
+    /// the filter is meant to remove. This is also the size on the badge, so
+    /// the filter matches what is on screen.
+    private func longestSide(of image: PageImage) -> Int {
+        if let pixels = loader.pixelSizes[image.id] {
+            return Int(max(pixels.width, pixels.height))
+        }
+        return max(image.width, image.height)
     }
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
