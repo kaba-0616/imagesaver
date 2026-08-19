@@ -157,6 +157,17 @@ Action.prototype = {
             }
         }
 
+        /// An <img> the page has created but not yet pointed at a file. A
+        /// slide caught in this state is invisible to the scan.
+        function countSourcelessImages() {
+            var imgs = document.querySelectorAll("img");
+            var count = 0;
+            for (var i = 0; i < imgs.length; i++) {
+                if (!imgs[i].currentSrc && !imgs[i].src) { count++; }
+            }
+            return count;
+        }
+
         function collectRendered() {
             try { scanRoot(document); } catch (e) {}
 
@@ -247,6 +258,9 @@ Action.prototype = {
             finished = true;
             collectRendered();
             collectSource();
+            note("最終DOM: img " + document.querySelectorAll("img").length
+                 + "個 / video " + document.querySelectorAll("video").length
+                 + "個 / srcなしimg " + countSourcelessImages() + "個");
             note("合計 " + images.length + "件 / 所要 "
                  + (Date.now() - startedAt) + "ms");
             params.completionFunction({
@@ -315,16 +329,25 @@ Action.prototype = {
                  + (labels.length ? labels.join(" / ") : "ラベルなし"));
         }
 
-        // The share sheet is blocked on this script and WebKit discards the
-        // result outright if it runs too long -- an overrun costs every image,
-        // not just the slow ones. Budget well under what has been observed to
-        // work rather than close to it.
-        var MAX_STEPS = 20;
+        // The share sheet is blocked on this script, so it cannot run
+        // indefinitely -- but 6.5s has been observed to work, and cutting the
+        // budget below that was a response to a misdiagnosis, not a real limit.
+        var MAX_STEPS = 25;
         var POLL_INTERVAL = 120;
-        var MAX_STEP_WAIT = 700;
-        var SETTLE_DELAY = 500;
+        var MAX_STEP_WAIT = 900;
+        var SETTLE_DELAY = 600;
+        // A slow slide should not end the walk: the control disappearing is the
+        // reliable signal, so tolerate a few empty steps before giving up.
+        var MAX_IDLE_STEPS = 3;
+        // React galleries unmount their controls while the slide transitions,
+        // so a missing button means "mid-transition" as often as "end of
+        // gallery". Re-check before believing it, and leave a gap between
+        // clicks so the next one is not swallowed by the animation.
+        var MAX_MISSING_CHECKS = 4;
+        var MISSING_RECHECK_DELAY = 250;
+        var MIN_STEP_GAP = 250;
         var startedAt = Date.now();
-        var deadline = startedAt + 4000;
+        var deadline = startedAt + 6000;
 
         // Compared without the query string: galleries commonly push the
         // slide number into it (Instagram uses ?img_index=N), which is not a
@@ -345,6 +368,7 @@ Action.prototype = {
         var passIndex = 0;
         var steps = 0;
         var idleSteps = 0;
+        var missingChecks = 0;
 
         // Where the gallery's own controls live, learned from the forward pass.
         // The backward pass is confined to it: a stray "previous" elsewhere on
@@ -353,8 +377,13 @@ Action.prototype = {
         var galleryScope = null;
 
         function rememberScope(control) {
+            var container = control.closest("article, [role='dialog'], main, section");
+            if (container) {
+                galleryScope = container;
+                return;
+            }
             var node = control;
-            for (var up = 0; up < 4 && node.parentElement; up++) {
+            for (var up = 0; up < 6 && node.parentElement; up++) {
                 node = node.parentElement;
             }
             galleryScope = node;
@@ -366,6 +395,7 @@ Action.prototype = {
                 note(reason + " / " + PASSES[passIndex].label + "へ");
                 steps = 0;
                 idleSteps = 0;
+                missingChecks = 0;
                 step();
             } else {
                 finishAfterSettle(reason);
@@ -391,14 +421,21 @@ Action.prototype = {
 
             var control = pass.find();
             if (!control) {
+                if (missingChecks < MAX_MISSING_CHECKS && Date.now() < deadline) {
+                    missingChecks++;
+                    setTimeout(step, MISSING_RECHECK_DELAY);
+                    return;
+                }
                 if (steps === 0 && passIndex === 0) {
                     note("「次へ」ボタンが見つからず、カルーセル送りは未実行");
                     noteAvailableControls();
                 }
-                endPass("「" + pass.label + "」ボタンが消えたため終了 ("
-                        + steps + "回送り)");
+                endPass("「" + pass.label + "」ボタンが "
+                        + (missingChecks * MISSING_RECHECK_DELAY)
+                        + "ms 待っても現れないため終了 (" + steps + "回送り)");
                 return;
             }
+            missingChecks = 0;
 
             var before = images.length;
             try {
@@ -438,23 +475,23 @@ Action.prototype = {
                      + "件 (" + waited + "ms)");
 
                 if (!pass.stopWhenIdle) {
-                    step();
+                    setTimeout(step, MIN_STEP_GAP);
                     return;
                 }
-                // Two dead steps in a row means the gallery has wrapped around
+                // Consecutive dead steps mean the gallery has wrapped around
                 // or stopped producing anything new.
                 idleSteps = (images.length === before) ? idleSteps + 1 : 0;
-                if (idleSteps >= 2) {
-                    endPass("新規が増えなくなったため終了");
+                if (idleSteps >= MAX_IDLE_STEPS) {
+                    endPass("新規が" + MAX_IDLE_STEPS + "回増えなかったため終了");
                 } else {
-                    step();
+                    setTimeout(step, MIN_STEP_GAP);
                 }
             }, POLL_INTERVAL);
         }
 
         // Backstop: the extension would hang forever if completionFunction
         // never ran, so guarantee it does.
-        setTimeout(finish, 5000);
+        setTimeout(finish, 7500);
         step();
     },
 
