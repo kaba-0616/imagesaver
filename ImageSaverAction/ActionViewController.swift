@@ -50,12 +50,24 @@ final class ActionViewController: UIViewController {
             _ trace: [String]
         ) -> Void
     ) {
-        guard let item = extensionContext?.inputItems.first as? NSExtensionItem,
+        // When the page script fails, its own trace is lost with it -- the
+        // trace travels inside the very result that went missing. So record
+        // what arrived on this side too, or an empty run explains nothing.
+        var diagnostics: [String] = []
+        let items = extensionContext?.inputItems ?? []
+        diagnostics.append("入力アイテム \(items.count)個")
+
+        guard let item = items.first as? NSExtensionItem,
               let attachments = item.attachments else {
-            DispatchQueue.main.async {
-                completion([], "", "", ["[ERR] 共有元からデータを受け取れませんでした"])
-            }
+            diagnostics.append("[ERR] 共有元からデータを受け取れませんでした")
+            DispatchQueue.main.async { completion([], "", "", diagnostics) }
             return
+        }
+
+        diagnostics.append("添付 \(attachments.count)個")
+        for (index, provider) in attachments.enumerated() {
+            diagnostics.append("  添付\(index + 1): "
+                               + provider.registeredTypeIdentifiers.joined(separator: ", "))
         }
 
         let providers = attachments.filter {
@@ -63,21 +75,45 @@ final class ActionViewController: UIViewController {
         }
 
         guard !providers.isEmpty else {
-            DispatchQueue.main.async {
-                completion([], "", "", ["[ERR] ページの解析結果が添付されていません"])
-            }
+            diagnostics.append("[ERR] property list 型の添付がありません")
+            DispatchQueue.main.async { completion([], "", "", diagnostics) }
             return
         }
 
         let group = DispatchGroup()
         var resultDict: [String: Any]?
 
+        // loadItem calls back on an arbitrary queue, and there can be more than
+        // one provider.
+        let lock = NSLock()
+        func record(_ line: String) {
+            lock.lock()
+            diagnostics.append(line)
+            lock.unlock()
+        }
+
         for provider in providers {
             group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.propertyList.identifier, options: nil) { item, _ in
-                if let dict = item as? [String: Any],
-                   let js = dict[NSExtensionJavaScriptPreprocessingResultsKey] as? [String: Any] {
+            provider.loadItem(forTypeIdentifier: UTType.propertyList.identifier, options: nil) { item, error in
+                if let error {
+                    record("[ERR] 添付の読み取りに失敗: \(error.localizedDescription)")
+                }
+                guard let dict = item as? [String: Any] else {
+                    record("[ERR] 想定外の型: \(type(of: item))")
+                    group.leave()
+                    return
+                }
+                record("辞書キー: \(dict.keys.sorted().joined(separator: ", "))")
+
+                if let js = dict[NSExtensionJavaScriptPreprocessingResultsKey] as? [String: Any] {
+                    lock.lock()
                     resultDict = js
+                    lock.unlock()
+                } else {
+                    // The key is absent when the page script never called its
+                    // completion function -- it threw, or it ran too long.
+                    record("[ERR] JS実行結果のキーがありません"
+                           + "(スクリプトが完了しなかった可能性)")
                 }
                 group.leave()
             }
@@ -87,7 +123,8 @@ final class ActionViewController: UIViewController {
             let pageTitle = resultDict?["pageTitle"] as? String ?? ""
             let pageURL = resultDict?["pageURL"] as? String ?? ""
             let rawImages = resultDict?["images"] as? [[String: Any]] ?? []
-            var trace = resultDict?["trace"] as? [String] ?? []
+            var trace = diagnostics
+            trace.append(contentsOf: resultDict?["trace"] as? [String] ?? [])
             if resultDict == nil {
                 trace.append("[ERR] 抽出スクリプトの結果が空でした")
             }

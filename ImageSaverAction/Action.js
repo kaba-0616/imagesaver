@@ -258,13 +258,20 @@ Action.prototype = {
         }
 
         var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
-        var PREV_LABEL = /^(prev|previous|back|前へ|戻る|前の.{0,6})$/i;
+        var PREV_LABEL = /^(prev|previous|前へ|前の.{0,6})$/i;
 
-        function findNextControl() { return findControl(NEXT_LABEL); }
-        function findPrevControl() { return findControl(PREV_LABEL); }
+        function findNextControl() { return findControl(NEXT_LABEL, null); }
 
-        function findControl(pattern) {
-            var candidates = document.querySelectorAll("[aria-label]");
+        function findPrevControl() {
+            if (!galleryScope) {
+                note("送りボタンの位置が不明なため、戻り方向は実行しない");
+                return null;
+            }
+            return findControl(PREV_LABEL, galleryScope);
+        }
+
+        function findControl(pattern, scope) {
+            var candidates = (scope || document).querySelectorAll("[aria-label]");
             var rejected = [];
             for (var i = 0; i < candidates.length; i++) {
                 var el = candidates[i];
@@ -339,6 +346,20 @@ Action.prototype = {
         var steps = 0;
         var idleSteps = 0;
 
+        // Where the gallery's own controls live, learned from the forward pass.
+        // The backward pass is confined to it: a stray "previous" elsewhere on
+        // the page is far more likely to be site navigation, and clicking that
+        // destroys this script along with the page.
+        var galleryScope = null;
+
+        function rememberScope(control) {
+            var node = control;
+            for (var up = 0; up < 4 && node.parentElement; up++) {
+                node = node.parentElement;
+            }
+            galleryScope = node;
+        }
+
         function endPass(reason) {
             passIndex++;
             if (passIndex < PASSES.length) {
@@ -387,6 +408,7 @@ Action.prototype = {
                 return;
             }
             steps++;
+            if (passIndex === 0) { rememberScope(control); }
             awaitSlide(pass, before, 0);
         }
 
