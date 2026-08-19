@@ -18,8 +18,6 @@ final class ActionViewController: UIViewController {
         extractJavaScriptResults { [weak self] images, pageTitle, pageURL, trace in
             guard let self else { return }
 
-            HistoryStore.recordVisit(pageURL: pageURL, pageTitle: pageTitle, imageCount: images.count)
-
             loading.willMove(toParent: nil)
             loading.view.removeFromSuperview()
             loading.removeFromParent()

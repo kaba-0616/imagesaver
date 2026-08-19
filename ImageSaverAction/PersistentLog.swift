@@ -15,8 +15,4 @@ enum PersistentLog {
     static func read() -> [String] {
         UserDefaults.standard.stringArray(forKey: key) ?? []
     }
-
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: key)
-    }
 }

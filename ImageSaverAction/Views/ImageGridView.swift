@@ -63,6 +63,14 @@ struct ImageGridView: View {
         SizeFilter(rawValue: storedSizeFilter) ?? .all
     }
 
+    /// Selection survives filter changes, so it can name images that are no
+    /// longer on screen. Everything the buttons act on is scoped to what is
+    /// actually visible -- otherwise the count is wrong and, worse, saving
+    /// writes images the filter was hiding.
+    private var selectedVisible: [PageImage] {
+        visibleImages.filter { selected.contains($0.id) }
+    }
+
     private var visibleImages: [PageImage] {
         images.filter { image in
             // Already-saved images drop out of the grid so it's obvious what is left to do.
@@ -301,11 +309,11 @@ struct ImageGridView: View {
             .font(.system(size: 11, design: .monospaced))
 
             HStack {
-                Button(selected.count == visibleImages.count ? "選択解除" : "全て選択") {
-                    if selected.count == visibleImages.count {
-                        selected.removeAll()
+                Button(allVisibleSelected ? "選択解除" : "全て選択") {
+                    if allVisibleSelected {
+                        selected.subtract(visibleImages.map(\.id))
                     } else {
-                        selected = Set(visibleImages.map(\.id))
+                        selected.formUnion(visibleImages.map(\.id))
                     }
                 }
                 .disabled(visibleImages.isEmpty)
@@ -313,22 +321,26 @@ struct ImageGridView: View {
                 Spacer()
 
                 Button {
-                    let targets = images.filter { selected.contains($0.id) }
+                    let targets = selectedVisible
                     Task {
                         await photoSaver.save(targets)
                         // Saved tiles leave the grid, so drop them from the selection.
                         selected.subtract(photoSaver.savedImageIDs)
                     }
                 } label: {
-                    Text("保存する (\(selected.count))")
+                    Text("保存する (\(selectedVisible.count))")
                         .bold()
                 }
-                .disabled(selected.isEmpty)
+                .disabled(selectedVisible.isEmpty)
             }
         }
         .padding()
         .background(Color.black)
         .overlay(Divider().opacity(0.3), alignment: .top)
+    }
+
+    private var allVisibleSelected: Bool {
+        !visibleImages.isEmpty && visibleImages.allSatisfy { selected.contains($0.id) }
     }
 
     private var hasHiddenImages: Bool {
