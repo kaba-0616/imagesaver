@@ -257,14 +257,18 @@ Action.prototype = {
         }
 
         var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
+        var PREV_LABEL = /^(prev|previous|back|前へ|戻る|前の.{0,6})$/i;
 
-        function findNextControl() {
+        function findNextControl() { return findControl(NEXT_LABEL); }
+        function findPrevControl() { return findControl(PREV_LABEL); }
+
+        function findControl(pattern) {
             var candidates = document.querySelectorAll("[aria-label]");
             var rejected = [];
             for (var i = 0; i < candidates.length; i++) {
                 var el = candidates[i];
                 var label = (el.getAttribute("aria-label") || "").trim();
-                if (!NEXT_LABEL.test(label)) { continue; }
+                if (!pattern.test(label)) { continue; }
                 var role = (el.getAttribute("role") || "").toLowerCase();
                 if (el.tagName !== "BUTTON" && role !== "button") {
                     rejected.push(label + "(" + el.tagName + "/role=" + (role || "なし") + ")");
@@ -284,7 +288,7 @@ Action.prototype = {
                 return el;
             }
             if (rejected.length) {
-                note("「次へ」候補を除外: " + rejected.slice(0, 5).join(", "));
+                note("送りボタン候補を除外: " + rejected.slice(0, 5).join(", "));
             }
             return null;
         }
@@ -308,7 +312,8 @@ Action.prototype = {
         var MAX_STEPS = 20;
         var STEP_DELAY = 500;
         var SETTLE_DELAY = 800;
-        var deadline = Date.now() + 6800;
+        var deadline = Date.now() + 7500;
+
         // Compared without the query string: galleries commonly push the
         // slide number into it (Instagram uses ?img_index=N), which is not a
         // navigation and must not abort the walk.
@@ -316,25 +321,48 @@ Action.prototype = {
             return document.location.origin + document.location.pathname;
         }
         var startIdentity = pageIdentity();
+
+        // Sharing from the middle of a gallery is normal, so walk forward to
+        // the end and then back to the start. Going back re-visits slides that
+        // are already collected, so that pass must not stop when nothing new
+        // turns up -- only when the control itself disappears.
+        var PASSES = [
+            { label: "次へ", find: findNextControl, stopWhenIdle: true },
+            { label: "前へ", find: findPrevControl, stopWhenIdle: false }
+        ];
+        var passIndex = 0;
         var steps = 0;
         var idleSteps = 0;
 
+        function endPass(reason) {
+            passIndex++;
+            if (passIndex < PASSES.length) {
+                note(reason + " / " + PASSES[passIndex].label + "へ");
+                steps = 0;
+                idleSteps = 0;
+                step();
+            } else {
+                finishAfterSettle(reason);
+            }
+        }
+
         function step() {
             if (finished) { return; }
+            var pass = PASSES[passIndex];
+
             if (steps >= MAX_STEPS || Date.now() > deadline) {
-                finishAfterSettle("上限に達したため終了 (" + steps + "回送り)");
+                endPass("上限に達したため" + pass.label + "終了 (" + steps + "回)");
                 return;
             }
-            var control = findNextControl();
+
+            var control = pass.find();
             if (!control) {
-                if (steps === 0) {
+                if (steps === 0 && passIndex === 0) {
                     note("「次へ」ボタンが見つからず、カルーセル送りは未実行");
                     noteAvailableControls();
-                    finish();
-                } else {
-                    finishAfterSettle("「次へ」ボタンが消えたため終了 ("
-                                      + steps + "回送り)");
                 }
+                endPass("「" + pass.label + "」ボタンが消えたため終了 ("
+                        + steps + "回送り)");
                 return;
             }
 
@@ -357,12 +385,17 @@ Action.prototype = {
                     return;
                 }
                 collectRendered();
-                note("送り" + steps + "回目: +" + (images.length - before) + "件");
+                note(pass.label + steps + "回目: +" + (images.length - before) + "件");
+
+                if (!pass.stopWhenIdle) {
+                    step();
+                    return;
+                }
                 // Two dead steps in a row means the gallery has wrapped around
                 // or stopped producing anything new.
                 idleSteps = (images.length === before) ? idleSteps + 1 : 0;
                 if (idleSteps >= 2) {
-                    finishAfterSettle("新規が増えなくなったため終了");
+                    endPass("新規が増えなくなったため終了");
                 } else {
                     step();
                 }
@@ -371,7 +404,7 @@ Action.prototype = {
 
         // Backstop: the extension would hang forever if completionFunction
         // never ran, so guarantee it does.
-        setTimeout(finish, 9000);
+        setTimeout(finish, 10000);
         step();
     },
 
