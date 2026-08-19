@@ -7,13 +7,23 @@ enum DisplayMode: String, CaseIterable {
 
 enum SizeFilter: Int, CaseIterable, Identifiable {
     case all = 0
-    // 250 clears site furniture -- favicons, avatars and app-badge artwork top
-    // out around 180. 700 additionally drops thumbnail-grade copies, leaving
-    // camera-resolution originals.
-    case medium = 250
-    case large = 700
+    case medium = 1
+    case large = 2
 
     var id: Int { rawValue }
+
+    /// Shortest acceptable longest-side, in pixels. Kept separate from the raw
+    /// value, which is persisted and must stay stable if these are retuned.
+    /// 250 clears site furniture -- favicons, avatars and app-badge artwork top
+    /// out around 180. 1000 additionally drops thumbnail- and screenshot-grade
+    /// copies, leaving camera-resolution originals.
+    var minimumPixels: Int {
+        switch self {
+        case .all: return 0
+        case .medium: return 250
+        case .large: return 1000
+        }
+    }
 
     /// Menu wording. The pixel threshold is kept as a hint so the tiers are
     /// not purely relative.
@@ -21,7 +31,7 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
         switch self {
         case .all: return "すべて表示"
         case .medium: return "小を除外 (250px未満)"
-        case .large: return "中・小を除外 (700px未満)"
+        case .large: return "中・小を除外 (1000px未満)"
         }
     }
 }
@@ -39,13 +49,19 @@ struct ImageGridView: View {
 
     @State private var selected: Set<Int> = []
     @State private var displayMode: DisplayMode = .grid
-    @State private var sizeFilter: SizeFilter = .all
+    /// Remembered between launches: re-picking the same filter on every share
+    /// was the most repeated interaction in the app.
+    @AppStorage("sizeFilter") private var storedSizeFilter = SizeFilter.all.rawValue
     /// Off by default: feed-style sites (Instagram and friends) keep images
     /// from unrelated posts in their payload, and including them makes the
     /// grid look like it scraped the wrong page.
     @State private var includeSourceOnly = false
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
+
+    private var sizeFilter: SizeFilter {
+        SizeFilter(rawValue: storedSizeFilter) ?? .all
+    }
 
     private var visibleImages: [PageImage] {
         images.filter { image in
@@ -54,7 +70,7 @@ struct ImageGridView: View {
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard sizeFilter != .all else { return true }
             let known = longestSide(of: image)
-            return known == 0 || known >= sizeFilter.rawValue
+            return known == 0 || known >= sizeFilter.minimumPixels
         }
     }
 
@@ -164,7 +180,7 @@ struct ImageGridView: View {
                     Menu {
                         ForEach(SizeFilter.allCases) { filter in
                             Button {
-                                sizeFilter = filter
+                                storedSizeFilter = filter.rawValue
                             } label: {
                                 if filter == sizeFilter {
                                     Label(filter.label, systemImage: "checkmark")
@@ -445,6 +461,8 @@ private struct LogSheet: View {
     let previousLog: [String]
     let onClose: () -> Void
 
+    @State private var showShareSheet = false
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -480,12 +498,25 @@ private struct LogSheet: View {
                 }
                 .padding()
             }
-            .navigationTitle("保存ログ")
+            .navigationTitle("ログ")
             .navigationBarTitleDisplayMode(.inline)
+            // The container app cannot read this: without an App Group the two
+            // processes have separate storage, and a free Apple ID cannot
+            // provision one. Sharing the text out is the way off this screen.
+            .sheet(isPresented: $showShareSheet) {
+                ActivityView(text: allLogText)
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("全部コピー") {
                         UIPasteboard.general.string = allLogText
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -530,4 +561,16 @@ private struct LogSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
     }
+}
+
+/// Hands the log text to the system share sheet. ShareLink would do this in one
+/// line, but it needs iOS 16 and this target still supports 15.
+private struct ActivityView: UIViewControllerRepresentable {
+    let text: String
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [text], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
