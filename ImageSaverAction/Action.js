@@ -247,7 +247,8 @@ Action.prototype = {
             finished = true;
             collectRendered();
             collectSource();
-            note("合計 " + images.length + "件");
+            note("合計 " + images.length + "件 / 所要 "
+                 + (Date.now() - startedAt) + "ms");
             params.completionFunction({
                 "images": images,
                 "pageTitle": document.title || "",
@@ -307,12 +308,16 @@ Action.prototype = {
                  + (labels.length ? labels.join(" / ") : "ラベルなし"));
         }
 
-        // Kept short: the share sheet is blocked on this script, and WebKit
-        // will not let it run indefinitely.
+        // The share sheet is blocked on this script and WebKit discards the
+        // result outright if it runs too long -- an overrun costs every image,
+        // not just the slow ones. Budget well under what has been observed to
+        // work rather than close to it.
         var MAX_STEPS = 20;
-        var STEP_DELAY = 500;
-        var SETTLE_DELAY = 800;
-        var deadline = Date.now() + 7500;
+        var POLL_INTERVAL = 120;
+        var MAX_STEP_WAIT = 700;
+        var SETTLE_DELAY = 500;
+        var startedAt = Date.now();
+        var deadline = startedAt + 4000;
 
         // Compared without the query string: galleries commonly push the
         // slide number into it (Instagram uses ?img_index=N), which is not a
@@ -349,7 +354,15 @@ Action.prototype = {
         function step() {
             if (finished) { return; }
             var pass = PASSES[passIndex];
+            try {
+                stepInner(pass);
+            } catch (e) {
+                note("[ERR] カルーセル送りで例外: " + e);
+                finish();
+            }
+        }
 
+        function stepInner(pass) {
             if (steps >= MAX_STEPS || Date.now() > deadline) {
                 endPass("上限に達したため" + pass.label + "終了 (" + steps + "回)");
                 return;
@@ -374,7 +387,12 @@ Action.prototype = {
                 return;
             }
             steps++;
+            awaitSlide(pass, before, 0);
+        }
 
+        /// Polls until the clicked slide's image shows up, rather than
+        /// guessing a fixed load time.
+        function awaitSlide(pass, before, waited) {
             setTimeout(function() {
                 if (finished) { return; }
                 // A click that navigated is a misidentified control; take what
@@ -384,8 +402,18 @@ Action.prototype = {
                     finish();
                     return;
                 }
+
                 collectRendered();
-                note(pass.label + steps + "回目: +" + (images.length - before) + "件");
+                waited += POLL_INTERVAL;
+
+                if (images.length === before && waited < MAX_STEP_WAIT
+                    && Date.now() < deadline) {
+                    awaitSlide(pass, before, waited);
+                    return;
+                }
+
+                note(pass.label + steps + "回目: +" + (images.length - before)
+                     + "件 (" + waited + "ms)");
 
                 if (!pass.stopWhenIdle) {
                     step();
@@ -399,12 +427,12 @@ Action.prototype = {
                 } else {
                     step();
                 }
-            }, STEP_DELAY);
+            }, POLL_INTERVAL);
         }
 
         // Backstop: the extension would hang forever if completionFunction
         // never ran, so guarantee it does.
-        setTimeout(finish, 10000);
+        setTimeout(finish, 5000);
         step();
     },
 
