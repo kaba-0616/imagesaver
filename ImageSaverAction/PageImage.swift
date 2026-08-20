@@ -13,6 +13,10 @@ struct PageImage: Identifiable, Hashable {
     /// these from the same CDN under the same naming as photographs, so the
     /// only thing that separates them is their tie to a <video> in the DOM.
     let isVideoPoster: Bool
+    /// Named only by the page's og:image / twitter:image tags. A single-page
+    /// app does not rewrite those as you navigate, so this can be a picture
+    /// from whichever page was served first.
+    let isPageMetaImage: Bool
 
     var formatLabel: String {
         switch url.pathExtension.lowercased() {

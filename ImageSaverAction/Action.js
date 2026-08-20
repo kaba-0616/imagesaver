@@ -141,15 +141,20 @@ Action.prototype = {
                 addURL(bestFromSrcset(linkEls[l].getAttribute("imagesrcset")), 0, 0);
             }
 
-            // og:image / twitter:image are usually the page's key visual at a
-            // higher resolution than anything laid out on screen.
+            // og:image / twitter:image are the page's key visual, often at a
+            // higher resolution than anything laid out on screen -- but a
+            // single-page app does not rewrite them as you navigate, so what
+            // they name can belong to a different page entirely. Tagged, and
+            // hidden unless asked for. This runs after the <img> sweep, so a
+            // URL the page really shows keeps its own origin and only the
+            // orphan is marked.
             var metaEls = root.querySelectorAll(
                 "meta[property='og:image'], meta[property='og:image:url'], "
                 + "meta[property='og:image:secure_url'], meta[name='twitter:image'], "
                 + "meta[name='twitter:image:src'], meta[itemprop='image']"
             );
             for (var mt = 0; mt < metaEls.length; mt++) {
-                addURL(metaEls[mt].getAttribute("content"), 0, 0);
+                addURL(metaEls[mt].getAttribute("content"), 0, 0, "meta");
             }
 
             var svgUse = root.querySelectorAll("image");
@@ -390,6 +395,14 @@ Action.prototype = {
             collectRendered(true);
             if (reason) { note(reason); }
             collectSource();
+            var metaImages = 0;
+            for (var mi = 0; mi < images.length; mi++) {
+                if (images[mi].origin === "meta") { metaImages++; }
+            }
+            if (metaImages > 0) {
+                note("OGP画像: " + metaImages + "件");
+            }
+
             var videoThumbs = 0;
             for (var vt = 0; vt < images.length; vt++) {
                 if (images[vt].origin === "video") { videoThumbs++; }

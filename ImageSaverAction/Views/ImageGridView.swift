@@ -60,6 +60,9 @@ struct ImageGridView: View {
     /// hand back a still frame for every video, which is not what "save the
     /// pictures on this page" means.
     @State private var includeVideoPosters = false
+    /// Off by default: on a single-page app the page's own og:image goes stale
+    /// as you navigate, so it is regularly a picture of a different page.
+    @State private var includeMetaImages = false
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
 
@@ -73,6 +76,7 @@ struct ImageGridView: View {
             guard !photoSaver.savedImageIDs.contains(image.id) else { return false }
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard includeVideoPosters || !image.isVideoPoster else { return false }
+            guard includeMetaImages || !image.isPageMetaImage else { return false }
             guard sizeFilter != .all else { return true }
             let known = longestSide(of: image)
             return known == 0 || known >= sizeFilter.minimumPixels
@@ -243,6 +247,21 @@ struct ImageGridView: View {
                         } else {
                             Text("動画のサムネイル: なし")
                         }
+
+                        if metaImageCount > 0 {
+                            Button {
+                                includeMetaImages.toggle()
+                            } label: {
+                                if includeMetaImages {
+                                    Label("ページ情報の画像も表示 (\(metaImageCount)件)",
+                                          systemImage: "checkmark")
+                                } else {
+                                    Text("ページ情報の画像も表示 (\(metaImageCount)件)")
+                                }
+                            }
+                        } else {
+                            Text("ページ情報の画像: なし")
+                        }
                     } label: {
                         // Filled while anything is being held back, so hidden
                         // images are discoverable without opening the menu.
@@ -358,6 +377,7 @@ struct ImageGridView: View {
         sizeFilter != .all
             || (!includeSourceOnly && sourceOnlyCount > 0)
             || (!includeVideoPosters && videoPosterCount > 0)
+            || (!includeMetaImages && metaImageCount > 0)
     }
 
     /// How many images the deeper scan found that the page does not render
@@ -368,6 +388,10 @@ struct ImageGridView: View {
 
     private var videoPosterCount: Int {
         images.filter { $0.isVideoPoster && !photoSaver.savedImageIDs.contains($0.id) }.count
+    }
+
+    private var metaImageCount: Int {
+        images.filter { $0.isPageMetaImage && !photoSaver.savedImageIDs.contains($0.id) }.count
     }
 
     private var statusText: String {

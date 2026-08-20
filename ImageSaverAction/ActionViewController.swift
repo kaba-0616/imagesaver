@@ -151,7 +151,8 @@ final class ActionViewController: UIViewController {
                     width: width,
                     height: height,
                     isFromSourceOnly: origin == "source",
-                    isVideoPoster: origin == "video"
+                    isVideoPoster: origin == "video",
+                    isPageMetaImage: origin == "meta"
                 ))
             }
 
