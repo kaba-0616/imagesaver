@@ -7,6 +7,18 @@ Action.prototype = {
         var images = [];
         var startedAt = Date.now();
 
+        // Discovery order is not page order. Walking a carousel backwards finds
+        // slide 8, then 7, then 6 -- so each image carries a sort key, and the
+        // backward pass numbers its finds below everything already seen.
+        var forwardOrder = 0;
+        var backwardBlock = 0;
+        var backwardWithinBlock = 0;
+
+        function nextOrder() {
+            if (backwardBlock === 0) { return forwardOrder++; }
+            return -(backwardBlock * 1000) + (backwardWithinBlock++);
+        }
+
         // Nothing on the device can attach a debugger to this script, so it
         // reports on itself.
         var trace = [];
@@ -44,7 +56,8 @@ Action.prototype = {
                 url: url,
                 width: width || 0,
                 height: height || 0,
-                origin: origin || "dom"
+                origin: origin || "dom",
+                order: nextOrder()
             });
         }
 
@@ -411,6 +424,8 @@ Action.prototype = {
             if (passIndex < PASSES.length && needsBackwardPass) {
                 note(reason + " / " + PASSES[passIndex].label + "へ");
                 steps = 0;
+                backwardBlock = 1;
+                backwardWithinBlock = 0;
                 step();
             } else {
                 handOff(reason);
@@ -446,6 +461,9 @@ Action.prototype = {
             }
             noteRenderedFilenames();
             note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");
+
+            images.sort(function(a, b) { return a.order - b.order; });
+
             params.completionFunction({
                 "images": images,
                 "pageTitle": document.title || "",
@@ -480,6 +498,12 @@ Action.prototype = {
                 return;
             }
             steps++;
+            if (backwardBlock !== 0) {
+                // Each step back reaches an earlier slide, so it sorts ahead of
+                // the step before it.
+                backwardBlock = steps;
+                backwardWithinBlock = 0;
+            }
 
             setTimeout(function() {
                 if (handedOff) { return; }

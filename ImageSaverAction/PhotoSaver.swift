@@ -98,33 +98,25 @@ final class PhotoSaver: ObservableObject {
         var failed = 0
         var lastError: String?
 
-        // Bounded concurrency keeps memory in check when saving many large photos at once.
-        let semaphore = AsyncSemaphore(limit: 4)
+        // Saved one at a time, in the order they appear in the grid. Running
+        // these concurrently finished them in whatever order the downloads
+        // happened to complete, which is the order they then appear in the
+        // camera roll.
+        for image in images {
+            let name = image.url.lastPathComponent
 
-        await withTaskGroup(of: (Int, String, Result<Void, Error>).self) { group in
-            for image in images {
-                group.addTask { [weak self] in
-                    guard let self else { return (image.id, "", .failure(SaveError.cancelled)) }
-                    await semaphore.wait()
-                    defer { Task { await semaphore.signal() } }
-                    let result = await self.saveOne(image)
-                    return (image.id, image.url.lastPathComponent, result)
-                }
+            switch await saveOne(image) {
+            case .success:
+                succeeded += 1
+                savedImageIDs.insert(image.id)
+                appendLog("OK: \(name)")
+            case .failure(let error):
+                failed += 1
+                lastError = error.localizedDescription
+                appendLog("失敗: \(name) — \(error.localizedDescription)", isError: true)
             }
 
-            for await (id, name, result) in group {
-                switch result {
-                case .success:
-                    succeeded += 1
-                    savedImageIDs.insert(id)
-                    appendLog("OK: \(name)")
-                case .failure(let error):
-                    failed += 1
-                    lastError = error.localizedDescription
-                    appendLog("失敗: \(name) — \(error.localizedDescription)", isError: true)
-                }
-                state = .saving(done: succeeded + failed, total: images.count)
-            }
+            state = .saving(done: succeeded + failed, total: images.count)
         }
 
         appendLog("完了: 成功\(succeeded) 失敗\(failed)")
