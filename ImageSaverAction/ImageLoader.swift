@@ -72,6 +72,18 @@ final class ImageLoader: ObservableObject {
         }
     }
 
+    func cancel(for imageID: Int) {
+        tasks[imageID]?.cancel()
+        tasks[imageID] = nil
+    }
+
+    func cancelAll() {
+        tasks.values.forEach { $0.cancel() }
+        tasks.removeAll()
+        fullImageTasks.values.forEach { $0.cancel() }
+        fullImageTasks.removeAll()
+    }
+
     private func downloadThumbnail(
         url: URL,
         maxPixelSize: CGFloat,

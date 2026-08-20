@@ -7,31 +7,18 @@ enum DisplayMode: String, CaseIterable {
 
 enum SizeFilter: Int, CaseIterable, Identifiable {
     case all = 0
-    case medium = 1
-    case large = 2
+    case medium = 100
+    case large = 300
 
     var id: Int { rawValue }
-
-    /// Shortest acceptable longest-side, in pixels. Kept separate from the raw
-    /// value, which is persisted and must stay stable if these are retuned.
-    /// 250 clears site furniture -- favicons, avatars and app-badge artwork top
-    /// out around 180. 1000 additionally drops thumbnail- and screenshot-grade
-    /// copies, leaving camera-resolution originals.
-    var minimumPixels: Int {
-        switch self {
-        case .all: return 0
-        case .medium: return 250
-        case .large: return 1000
-        }
-    }
 
     /// Menu wording. The pixel threshold is kept as a hint so the tiers are
     /// not purely relative.
     var label: String {
         switch self {
         case .all: return "すべて表示"
-        case .medium: return "小を除外 (250px未満)"
-        case .large: return "中・小を除外 (1000px未満)"
+        case .medium: return "小を除外 (100px未満)"
+        case .large: return "中・小を除外 (300px未満)"
         }
     }
 }
@@ -39,9 +26,6 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
 struct ImageGridView: View {
     let images: [PageImage]
     let pageTitle: String
-    /// What the page-extraction script did and found. Nothing on the device can
-    /// debug that script, so it reports on itself and the result lands here.
-    let extractionLog: [String]
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -49,9 +33,7 @@ struct ImageGridView: View {
 
     @State private var selected: Set<Int> = []
     @State private var displayMode: DisplayMode = .grid
-    /// Remembered between launches: re-picking the same filter on every share
-    /// was the most repeated interaction in the app.
-    @AppStorage("sizeFilter") private var storedSizeFilter = SizeFilter.all.rawValue
+    @State private var sizeFilter: SizeFilter = .all
     /// Off by default: feed-style sites (Instagram and friends) keep images
     /// from unrelated posts in their payload, and including them makes the
     /// grid look like it scraped the wrong page.
@@ -59,39 +41,15 @@ struct ImageGridView: View {
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
 
-    private var sizeFilter: SizeFilter {
-        SizeFilter(rawValue: storedSizeFilter) ?? .all
-    }
-
-    /// Selection survives filter changes, so it can name images that are no
-    /// longer on screen. Everything the buttons act on is scoped to what is
-    /// actually visible -- otherwise the count is wrong and, worse, saving
-    /// writes images the filter was hiding.
-    private var selectedVisible: [PageImage] {
-        visibleImages.filter { selected.contains($0.id) }
-    }
-
     private var visibleImages: [PageImage] {
         images.filter { image in
             // Already-saved images drop out of the grid so it's obvious what is left to do.
             guard !photoSaver.savedImageIDs.contains(image.id) else { return false }
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard sizeFilter != .all else { return true }
-            let known = longestSide(of: image)
-            return known == 0 || known >= sizeFilter.minimumPixels
+            let known = max(image.width, image.height)
+            return known == 0 || known >= sizeFilter.rawValue
         }
-    }
-
-    /// Prefers the real pixel size read from the downloaded file. Many images
-    /// are found through tags that carry no dimensions (apple-touch-icon, meta,
-    /// preload), so the DOM's own numbers are 0 for exactly the site furniture
-    /// the filter is meant to remove. This is also the size on the badge, so
-    /// the filter matches what is on screen.
-    private func longestSide(of image: PageImage) -> Int {
-        if let pixels = loader.pixelSizes[image.id] {
-            return Int(max(pixels.width, pixels.height))
-        }
-        return max(image.width, image.height)
     }
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
@@ -105,7 +63,6 @@ struct ImageGridView: View {
             .preferredColorScheme(.dark)
             .sheet(isPresented: $showLogSheet) {
                 LogSheet(
-                    extractionLog: extractionLog,
                     currentLog: photoSaver.log,
                     previousLog: PersistentLog.read()
                 ) { showLogSheet = false }
@@ -188,7 +145,7 @@ struct ImageGridView: View {
                     Menu {
                         ForEach(SizeFilter.allCases) { filter in
                             Button {
-                                storedSizeFilter = filter.rawValue
+                                sizeFilter = filter
                             } label: {
                                 if filter == sizeFilter {
                                     Label(filter.label, systemImage: "checkmark")
@@ -196,26 +153,6 @@ struct ImageGridView: View {
                                     Text(filter.label)
                                 }
                             }
-                        }
-
-                        Divider()
-
-                        // Always present, even at zero: otherwise a missing
-                        // entry is indistinguishable from the scan having
-                        // found nothing.
-                        if sourceOnlyCount > 0 {
-                            Button {
-                                includeSourceOnly.toggle()
-                            } label: {
-                                if includeSourceOnly {
-                                    Label("ソース内の画像も表示 (\(sourceOnlyCount)件)",
-                                          systemImage: "checkmark")
-                                } else {
-                                    Text("ソース内の画像も表示 (\(sourceOnlyCount)件)")
-                                }
-                            }
-                        } else {
-                            Text("ソース内の画像: なし")
                         }
                     } label: {
                         // Filled while anything is being held back, so hidden
@@ -278,15 +215,6 @@ struct ImageGridView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 6) {
-            if let exclusionSummary {
-                Text(exclusionSummary)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.gray)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
             // Always-visible status line: overlays can be suppressed inside an
             // extension's presentation context, so state is mirrored here too.
             HStack(spacing: 6) {
@@ -318,11 +246,11 @@ struct ImageGridView: View {
             .font(.system(size: 11, design: .monospaced))
 
             HStack {
-                Button(allVisibleSelected ? "選択解除" : "全て選択") {
-                    if allVisibleSelected {
-                        selected.subtract(visibleImages.map(\.id))
+                Button(selected.count == visibleImages.count ? "選択解除" : "全て選択") {
+                    if selected.count == visibleImages.count {
+                        selected.removeAll()
                     } else {
-                        selected.formUnion(visibleImages.map(\.id))
+                        selected = Set(visibleImages.map(\.id))
                     }
                 }
                 .disabled(visibleImages.isEmpty)
@@ -330,26 +258,22 @@ struct ImageGridView: View {
                 Spacer()
 
                 Button {
-                    let targets = selectedVisible
+                    let targets = images.filter { selected.contains($0.id) }
                     Task {
                         await photoSaver.save(targets)
                         // Saved tiles leave the grid, so drop them from the selection.
                         selected.subtract(photoSaver.savedImageIDs)
                     }
                 } label: {
-                    Text("保存する (\(selectedVisible.count))")
+                    Text("保存する (\(selected.count))")
                         .bold()
                 }
-                .disabled(selectedVisible.isEmpty)
+                .disabled(selected.isEmpty)
             }
         }
         .padding()
         .background(Color.black)
         .overlay(Divider().opacity(0.3), alignment: .top)
-    }
-
-    private var allVisibleSelected: Bool {
-        !visibleImages.isEmpty && visibleImages.allSatisfy { selected.contains($0.id) }
     }
 
     private var hasHiddenImages: Bool {
@@ -358,32 +282,6 @@ struct ImageGridView: View {
 
     /// How many images the deeper scan found that the page does not render
     /// itself. Zero means there is nothing to offer and no toggle to show.
-    /// Why images are missing from the grid, counted by the rule that removed
-    /// them. Extraction succeeding while the grid still looks short is
-    /// otherwise indistinguishable from extraction having failed.
-    private var exclusionSummary: String? {
-        var saved = 0
-        var sourceOnly = 0
-        var tooSmall = 0
-
-        for image in images {
-            if photoSaver.savedImageIDs.contains(image.id) {
-                saved += 1
-            } else if !includeSourceOnly && image.isFromSourceOnly {
-                sourceOnly += 1
-            } else if sizeFilter != .all {
-                let known = longestSide(of: image)
-                if known != 0 && known < sizeFilter.minimumPixels { tooSmall += 1 }
-            }
-        }
-
-        var parts = ["表示\(visibleImages.count)"]
-        if tooSmall > 0 { parts.append("サイズ除外\(tooSmall)") }
-        if sourceOnly > 0 { parts.append("ソース内\(sourceOnly)") }
-        if saved > 0 { parts.append("保存済\(saved)") }
-        return parts.count > 1 ? parts.joined(separator: " / ") : nil
-    }
-
     private var sourceOnlyCount: Int {
         images.filter { $0.isFromSourceOnly && !photoSaver.savedImageIDs.contains($0.id) }.count
     }
@@ -502,31 +400,15 @@ private struct ThumbnailCell: View {
     }
 }
 
-struct LogSheet: View {
-    let extractionLog: [String]
+private struct LogSheet: View {
     let currentLog: [PhotoSaver.LogEntry]
     let previousLog: [String]
     let onClose: () -> Void
-
-    @State private var showShareSheet = false
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(RunID.label)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-
-                    if !extractionLog.isEmpty {
-                        section(title: "読み込み") {
-                            ForEach(Array(extractionLog.enumerated()), id: \.offset) { _, text in
-                                line(text, isError: text.hasPrefix("[ERR]"))
-                            }
-                        }
-                    }
-
                     if !currentLog.isEmpty {
                         section(title: "今回の保存") {
                             ForEach(currentLog) { entry in
@@ -543,32 +425,19 @@ struct LogSheet: View {
                         }
                     }
 
-                    if extractionLog.isEmpty && currentLog.isEmpty && previousLog.isEmpty {
+                    if currentLog.isEmpty && previousLog.isEmpty {
                         Text("まだ記録がありません")
                             .foregroundColor(.secondary)
                     }
                 }
                 .padding()
             }
-            .navigationTitle("ログ")
+            .navigationTitle("保存ログ")
             .navigationBarTitleDisplayMode(.inline)
-            // The container app cannot read this: without an App Group the two
-            // processes have separate storage, and a free Apple ID cannot
-            // provision one. Sharing the text out is the way off this screen.
-            .sheet(isPresented: $showShareSheet) {
-                ActivityView(text: allLogText)
-            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("全部コピー") {
                         UIPasteboard.general.string = allLogText
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showShareSheet = true
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -580,11 +449,7 @@ struct LogSheet: View {
     }
 
     private var allLogText: String {
-        var lines: [String] = [RunID.label]
-        if !extractionLog.isEmpty {
-            lines.append("=== 読み込み ===")
-            lines.append(contentsOf: extractionLog)
-        }
+        var lines: [String] = []
         if !currentLog.isEmpty {
             lines.append("=== 今回の保存 ===")
             lines.append(contentsOf: currentLog.map { ($0.isError ? "[ERR] " : "") + $0.text })
@@ -613,16 +478,4 @@ struct LogSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
     }
-}
-
-/// Hands the log text to the system share sheet. ShareLink would do this in one
-/// line, but it needs iOS 16 and this target still supports 15.
-private struct ActivityView: UIViewControllerRepresentable {
-    let text: String
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [text], applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

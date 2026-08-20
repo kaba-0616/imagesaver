@@ -53,16 +53,6 @@ struct ContentView: View {
                     Text("共有シートから保存する前に、ここで写真への保存を許可しておく必要があります。")
                 }
 
-                Section {
-                    NavigationLink(destination: LogLocationGuideView()) {
-                        Label("ログの見かた", systemImage: "doc.text.magnifyingglass")
-                    }
-                } header: {
-                    Text("ログ")
-                } footer: {
-                    Text("読み込みと保存の記録は共有シート側の画面に残ります。このアプリからは読み取れません。")
-                }
-
                 Section("バージョン") {
                     HStack {
                         Text("インストール中のビルド")
@@ -103,24 +93,6 @@ struct ContentView: View {
         case .authorized, .limited: return .green
         default: return .orange
         }
-    }
-}
-
-private struct LogLocationGuideView: View {
-    var body: some View {
-        List {
-            Section {
-                Text("Safariの共有シートからImageSaverを開き、画面下部の「ログ」をタップしてください。読み込み(ページから画像を探した経過)と保存の記録が表示されます。")
-                Text("右上の共有ボタンから、ログ全文をメモやメールに送り出せます。")
-            }
-
-            Section {
-                Text("共有シートの拡張機能と、このアプリは別々のプロセスとして動いており、保存領域も分かれています。両者で記録を共有するにはApp Groupsという仕組みが必要ですが、無料のApple IDでは利用できないため、このアプリ側にログを表示することができません。")
-            } header: {
-                Text("なぜアプリから見られないのか")
-            }
-        }
-        .navigationTitle("ログの見かた")
     }
 }
 

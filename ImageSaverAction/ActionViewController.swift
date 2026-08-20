@@ -8,8 +8,6 @@ final class ActionViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        RunID.beginRun()
-
         let loading = UIHostingController(rootView: LoadingView())
         addChild(loading)
         loading.view.frame = view.bounds
@@ -17,32 +15,24 @@ final class ActionViewController: UIViewController {
         view.addSubview(loading.view)
         loading.didMove(toParent: self)
 
-        extractJavaScriptResults { [weak self] result in
+        extractJavaScriptResults { [weak self] images, pageTitle, pageURL in
             guard let self else { return }
+
+            HistoryStore.recordVisit(pageURL: pageURL, pageTitle: pageTitle, imageCount: images.count)
 
             loading.willMove(toParent: nil)
             loading.view.removeFromSuperview()
             loading.removeFromParent()
 
-            let close: () -> Void = { [weak self] in
-                self?.extensionContext?.completeRequest(returningItems: nil)
-            }
+            let rootView = ImageGridView(
+                images: images,
+                pageTitle: pageTitle,
+                onClose: { [weak self] in
+                    self?.extensionContext?.completeRequest(returningItems: nil)
+                }
+            )
 
-            let hosting: UIHostingController<AnyView>
-            if result.scriptFailed {
-                hosting = UIHostingController(rootView: AnyView(
-                    ExtractionFailedRootView(extractionLog: result.trace, onClose: close)
-                ))
-            } else {
-                hosting = UIHostingController(rootView: AnyView(
-                    ImageGridView(
-                        images: result.images,
-                        pageTitle: result.pageTitle,
-                        extractionLog: result.trace,
-                        onClose: close
-                    )
-                ))
-            }
+            let hosting = UIHostingController(rootView: rootView)
             self.addChild(hosting)
             hosting.view.frame = self.view.bounds
             hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -51,40 +41,13 @@ final class ActionViewController: UIViewController {
         }
     }
 
-    struct ExtractionResult {
-        let images: [PageImage]
-        let pageTitle: String
-        let trace: [String]
-        /// The page script returned nothing at all, which is recoverable by
-        /// re-sharing -- distinct from a page that genuinely has no images.
-        let scriptFailed: Bool
-    }
-
     private func extractJavaScriptResults(
-        completion: @escaping (ExtractionResult) -> Void
+        completion: @escaping (_ images: [PageImage], _ pageTitle: String, _ pageURL: String) -> Void
     ) {
-        // When the page script fails, its own trace is lost with it -- the
-        // trace travels inside the very result that went missing. So record
-        // what arrived on this side too, or an empty run explains nothing.
-        var diagnostics: [String] = []
-        let items = extensionContext?.inputItems ?? []
-        diagnostics.append("入力アイテム \(items.count)個")
-
-        guard let item = items.first as? NSExtensionItem,
+        guard let item = extensionContext?.inputItems.first as? NSExtensionItem,
               let attachments = item.attachments else {
-            diagnostics.append("[ERR] 共有元からデータを受け取れませんでした")
-            let failure = diagnostics
-            DispatchQueue.main.async {
-                completion(ExtractionResult(images: [], pageTitle: "",
-                                            trace: failure, scriptFailed: true))
-            }
+            DispatchQueue.main.async { completion([], "", "") }
             return
-        }
-
-        diagnostics.append("添付 \(attachments.count)個")
-        for (index, provider) in attachments.enumerated() {
-            diagnostics.append("  添付\(index + 1): "
-                               + provider.registeredTypeIdentifiers.joined(separator: ", "))
         }
 
         let providers = attachments.filter {
@@ -92,55 +55,19 @@ final class ActionViewController: UIViewController {
         }
 
         guard !providers.isEmpty else {
-            diagnostics.append("[ERR] property list 型の添付がありません")
-            let failure = diagnostics
-            DispatchQueue.main.async {
-                completion(ExtractionResult(images: [], pageTitle: "",
-                                            trace: failure, scriptFailed: true))
-            }
+            DispatchQueue.main.async { completion([], "", "") }
             return
         }
 
         let group = DispatchGroup()
         var resultDict: [String: Any]?
 
-        // loadItem calls back on an arbitrary queue, and there can be more than
-        // one provider.
-        let lock = NSLock()
-        func record(_ line: String) {
-            lock.lock()
-            diagnostics.append(line)
-            lock.unlock()
-        }
-
         for provider in providers {
             group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.propertyList.identifier, options: nil) { item, error in
-                if let error {
-                    record("[ERR] 添付の読み取りに失敗: \(error.localizedDescription)")
-                }
-                guard let dict = item as? [String: Any] else {
-                    // nil here means the page script never completed: an
-                    // overrunning script has its result discarded outright.
-                    // Safari also delivers "no result" as an archived null
-                    // rather than nil, which looked like a hex dump in the log.
-                    record(item == nil || item is NSData
-                           ? "[ERR] 解析結果が空 (ページ側スクリプトが完了しなかった)"
-                           : "[ERR] 想定外の型: \(String(describing: item))")
-                    group.leave()
-                    return
-                }
-                record("辞書キー: \(dict.keys.sorted().joined(separator: ", "))")
-
-                if let js = dict[NSExtensionJavaScriptPreprocessingResultsKey] as? [String: Any] {
-                    lock.lock()
+            provider.loadItem(forTypeIdentifier: UTType.propertyList.identifier, options: nil) { item, _ in
+                if let dict = item as? [String: Any],
+                   let js = dict[NSExtensionJavaScriptPreprocessingResultsKey] as? [String: Any] {
                     resultDict = js
-                    lock.unlock()
-                } else {
-                    // The key is absent when the page script never called its
-                    // completion function -- it threw, or it ran too long.
-                    record("[ERR] JS実行結果のキーがありません"
-                           + "(スクリプトが完了しなかった可能性)")
                 }
                 group.leave()
             }
@@ -148,12 +75,8 @@ final class ActionViewController: UIViewController {
 
         group.notify(queue: .main) {
             let pageTitle = resultDict?["pageTitle"] as? String ?? ""
+            let pageURL = resultDict?["pageURL"] as? String ?? ""
             let rawImages = resultDict?["images"] as? [[String: Any]] ?? []
-            var trace = diagnostics
-            trace.append(contentsOf: resultDict?["trace"] as? [String] ?? [])
-            if resultDict == nil {
-                trace.append("[ERR] 抽出スクリプトの結果が空でした")
-            }
 
             var images: [PageImage] = []
             images.reserveCapacity(rawImages.count)
@@ -171,16 +94,7 @@ final class ActionViewController: UIViewController {
                 ))
             }
 
-            let sourceOnly = images.filter(\.isFromSourceOnly).count
-            trace.append("受け取り \(images.count)件 "
-                         + "(ページ内 \(images.count - sourceOnly) / ソース内 \(sourceOnly))")
-
-            completion(ExtractionResult(
-                images: images,
-                pageTitle: pageTitle,
-                trace: trace,
-                scriptFailed: resultDict == nil
-            ))
+            completion(images, pageTitle, pageURL)
         }
     }
 }

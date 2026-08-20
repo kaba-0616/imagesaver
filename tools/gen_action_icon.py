@@ -7,11 +7,7 @@ glyphs), not a filled tile -- a fully opaque square renders as a solid square.
 """
 import math, struct, zlib, os
 
-# Matched by eye against the stock Copy and Bookmark glyphs sitting beside
-# this one in the share sheet: they are drawn thinner, and sit smaller inside
-# their circle, than a naive full-bleed glyph.
-STROKE = 0.043          # line width, fraction of canvas
-GLYPH_SCALE = 0.74      # shrink about the centre, leaving breathing room
+STROKE = 0.075          # line width, fraction of canvas
 SS = 4                  # supersampling factor per axis
 
 
@@ -41,19 +37,7 @@ def build_glyph():
     segs += polyline([(left + r, bottom), (right - r, bottom)])
     segs += polyline(arc_points(right - r, bottom - r, r, math.pi / 2, 0))
     segs += polyline([(right, bottom - r), (right, top)])
-    return recentre(segs, GLYPH_SCALE)
-
-
-def recentre(segs, scale):
-    """Scale about the drawing's own centre and place it in the canvas centre."""
-    xs = [p[0] for seg in segs for p in seg]
-    ys = [p[1] for seg in segs for p in seg]
-    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-
-    def move(p):
-        return (0.5 + (p[0] - cx) * scale, 0.5 + (p[1] - cy) * scale)
-
-    return [(move(a), move(b)) for a, b in segs]
+    return segs
 
 
 def dist_to_segment(px, py, a, b):

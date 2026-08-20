@@ -12,6 +12,7 @@ final class PhotoSaver: ObservableObject {
 
     struct LogEntry: Identifiable {
         let id = UUID()
+        let time: Date
         let text: String
         let isError: Bool
     }
@@ -91,6 +92,8 @@ final class PhotoSaver: ObservableObject {
             return
         }
 
+        state = .saving(done: 0, total: images.count)
+
         var succeeded = 0
         var failed = 0
         var lastError: String?
@@ -133,8 +136,12 @@ final class PhotoSaver: ObservableObject {
         )
     }
 
+    func reset() {
+        state = .idle
+    }
+
     private func appendLog(_ text: String, isError: Bool = false) {
-        log.append(LogEntry(text: text, isError: isError))
+        log.append(LogEntry(time: Date(), text: text, isError: isError))
         // Persist after every line: if the extension is killed mid-save the log
         // is still readable on the next launch, which is the only way to see
         // what happened when the host tears the UI down.
@@ -172,31 +179,12 @@ final class PhotoSaver: ObservableObject {
                 guard UIImage(data: data) != nil else {
                     throw SaveError.decodeFailed
                 }
-                try await addToLibrary(
-                    data: data,
-                    fileExtension: fileExtension(for: image.url, response: response)
-                )
+                let ext = image.url.pathExtension.isEmpty ? "jpg" : image.url.pathExtension
+                try await addToLibrary(data: data, fileExtension: ext)
             }
             return .success(())
         } catch {
             return .failure(error)
-        }
-    }
-
-    /// Plenty of image URLs carry no extension, and defaulting those to "jpg"
-    /// files a PNG or WebP under the wrong type. The server's own content type
-    /// is the more reliable answer when the URL has nothing to offer.
-    private func fileExtension(for url: URL, response: URLResponse) -> String {
-        let fromURL = url.pathExtension.lowercased()
-        if !fromURL.isEmpty { return fromURL }
-
-        switch response.mimeType?.lowercased() {
-        case "image/png": return "png"
-        case "image/gif": return "gif"
-        case "image/webp": return "webp"
-        case "image/heic", "image/heif": return "heic"
-        case "image/tiff": return "tiff"
-        default: return "jpg"
         }
     }
 
