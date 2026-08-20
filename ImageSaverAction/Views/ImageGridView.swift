@@ -278,6 +278,15 @@ struct ImageGridView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 6) {
+            if let exclusionSummary {
+                Text(exclusionSummary)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.gray)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             // Always-visible status line: overlays can be suppressed inside an
             // extension's presentation context, so state is mirrored here too.
             HStack(spacing: 6) {
@@ -349,6 +358,32 @@ struct ImageGridView: View {
 
     /// How many images the deeper scan found that the page does not render
     /// itself. Zero means there is nothing to offer and no toggle to show.
+    /// Why images are missing from the grid, counted by the rule that removed
+    /// them. Extraction succeeding while the grid still looks short is
+    /// otherwise indistinguishable from extraction having failed.
+    private var exclusionSummary: String? {
+        var saved = 0
+        var sourceOnly = 0
+        var tooSmall = 0
+
+        for image in images {
+            if photoSaver.savedImageIDs.contains(image.id) {
+                saved += 1
+            } else if !includeSourceOnly && image.isFromSourceOnly {
+                sourceOnly += 1
+            } else if sizeFilter != .all {
+                let known = longestSide(of: image)
+                if known != 0 && known < sizeFilter.minimumPixels { tooSmall += 1 }
+            }
+        }
+
+        var parts = ["表示\(visibleImages.count)"]
+        if tooSmall > 0 { parts.append("サイズ除外\(tooSmall)") }
+        if sourceOnly > 0 { parts.append("ソース内\(sourceOnly)") }
+        if saved > 0 { parts.append("保存済\(saved)") }
+        return parts.count > 1 ? parts.joined(separator: " / ") : nil
+    }
+
     private var sourceOnlyCount: Int {
         images.filter { $0.isFromSourceOnly && !photoSaver.savedImageIDs.contains($0.id) }.count
     }
