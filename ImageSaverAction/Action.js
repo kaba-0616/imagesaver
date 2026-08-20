@@ -161,17 +161,28 @@ Action.prototype = {
         /// other slides are hiding in the page payload cannot be told from
         /// counts alone, and hunting for them through the grid is tedious.
         function noteSourceSamples() {
+            var names = distinctFilenames("source", 12);
+            note(names.length
+                 ? "ソース内のファイル名(" + names.length + "種): " + names.join(" / ")
+                 : "ソース内に長いファイル名は無し");
+        }
+
+        /// Distinct filenames, ignoring the query string: the same file reached
+        /// through several URLs is one file, and listing it a dozen times
+        /// crowds out everything else.
+        function distinctFilenames(origin, limit) {
             var names = [];
-            for (var i = 0; i < images.length && names.length < 12; i++) {
-                if (images[i].origin !== "source") { continue; }
+            var seenNames = {};
+            for (var i = 0; i < images.length && names.length < limit; i++) {
+                var isSource = images[i].origin === "source";
+                if (origin === "source" ? !isSource : isSource) { continue; }
                 var name = images[i].url.split("?")[0].split("/").pop();
                 // Short names are site furniture; content files are long.
-                if (name.length < 20) { continue; }
+                if (name.length < 20 || seenNames[name]) { continue; }
+                seenNames[name] = true;
                 names.push(name.length > 46 ? name.slice(0, 46) + "…" : name);
             }
-            note(names.length
-                 ? "ソース内のファイル名: " + names.join(" / ")
-                 : "ソース内に長いファイル名は無し");
+            return names;
         }
 
         /// An <img> the page has created but not yet pointed at a file. A
@@ -185,16 +196,18 @@ Action.prototype = {
             return count;
         }
 
+        function startingSlide() {
+            var match = /[?&]img_index=(\d+)/.exec(document.URL);
+            if (match) { return match[1] + "枚目"; }
+            var hash = /[?&](?:page|slide|index|p)=(\d+)/.exec(document.URL);
+            if (hash) { return hash[1] + "枚目 (推定)"; }
+            return "不明 (URLに位置情報なし)";
+        }
+
         function noteRenderedSamples() {
-            var names = [];
-            for (var i = 0; i < images.length && names.length < 6; i++) {
-                if (images[i].origin === "source") { continue; }
-                var name = images[i].url.split("?")[0].split("/").pop();
-                if (name.length < 20) { continue; }
-                names.push(name.length > 46 ? name.slice(0, 46) + "…" : name);
-            }
+            var names = distinctFilenames("dom", 10);
             note(names.length
-                 ? "ページ内のファイル名: " + names.join(" / ")
+                 ? "ページ内のファイル名(" + names.length + "種): " + names.join(" / ")
                  : "ページ内に長いファイル名は無し");
         }
 
@@ -584,6 +597,10 @@ Action.prototype = {
         try {
             collectRendered();
             note("URL: " + document.URL);
+            // Which slide the share started from decides what is reachable: the
+            // DOM holds the visible slide and its neighbours, so the same post
+            // yields a different set depending on where the user was.
+            note("開始スライド: " + startingSlide());
             note("img要素 " + document.querySelectorAll("img").length
                  + "個 / 初回スキャン " + images.length + "件");
 
