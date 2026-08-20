@@ -8,6 +8,8 @@ final class ActionViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
+        RunID.beginRun()
+
         let loading = UIHostingController(rootView: LoadingView())
         addChild(loading)
         loading.view.frame = view.bounds
