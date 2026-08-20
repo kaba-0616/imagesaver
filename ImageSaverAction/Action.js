@@ -573,13 +573,16 @@ Action.prototype = {
             }, POLL_INTERVAL);
         }
 
-        // Carousels here keep only the visible slide in the DOM and the rest
-        // is nowhere in the page source either, so clicking through is the only
-        // way to reach it. The cost is that this run must finish
-        // asynchronously, and Safari sometimes freezes the page's timers once
-        // the share sheet covers it -- the callbacks never run and the host
-        // receives nothing. The extension detects that and asks for a retry.
-        var CAROUSEL_HOSTS = ["instagram.com"];
+        // Disabled after measuring it: two runs in four returned nothing at
+        // all, and on the runs that did work it added no images -- sharing from
+        // the middle of a carousel already yields the neighbouring slides. The
+        // walk must finish asynchronously, and Safari sometimes freezes the
+        // page's timers once the share sheet covers it, so completionFunction
+        // never runs and every image is lost, not just the extra slides.
+        //
+        // The machinery below is intact: putting "instagram.com" back in this
+        // list re-enables it.
+        var CAROUSEL_HOSTS = [];
 
         function hostWalksCarousels() {
             var host = (document.location.hostname || "").toLowerCase();
@@ -605,8 +608,7 @@ Action.prototype = {
                  + "個 / 初回スキャン " + images.length + "件");
 
             if (!hostWalksCarousels()) {
-                note("カルーセル送りの対象サイトではないため実行しない ("
-                     + document.location.hostname + ")");
+                note("カルーセル送りは無効 (同期完了)");
                 finish();
             } else {
                 // Backstop: the extension would hang forever if
