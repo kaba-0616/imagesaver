@@ -17,24 +17,32 @@ final class ActionViewController: UIViewController {
         view.addSubview(loading.view)
         loading.didMove(toParent: self)
 
-        extractJavaScriptResults { [weak self] images, pageTitle, pageURL in
+        extractJavaScriptResults { [weak self] result in
             guard let self else { return }
-
-            HistoryStore.recordVisit(pageURL: pageURL, pageTitle: pageTitle, imageCount: images.count)
 
             loading.willMove(toParent: nil)
             loading.view.removeFromSuperview()
             loading.removeFromParent()
 
-            let rootView = ImageGridView(
-                images: images,
-                pageTitle: pageTitle,
-                onClose: { [weak self] in
-                    self?.extensionContext?.completeRequest(returningItems: nil)
-                }
-            )
+            let close: () -> Void = { [weak self] in
+                self?.extensionContext?.completeRequest(returningItems: nil)
+            }
 
-            let hosting = UIHostingController(rootView: rootView)
+            let hosting: UIHostingController<AnyView>
+            if result.scriptFailed {
+                hosting = UIHostingController(rootView: AnyView(
+                    ExtractionFailedRootView(extractionLog: result.trace, onClose: close)
+                ))
+            } else {
+                hosting = UIHostingController(rootView: AnyView(
+                    ImageGridView(
+                        images: result.images,
+                        pageTitle: result.pageTitle,
+                        extractionLog: result.trace,
+                        onClose: close
+                    )
+                ))
+            }
             self.addChild(hosting)
             hosting.view.frame = self.view.bounds
             hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -43,33 +51,82 @@ final class ActionViewController: UIViewController {
         }
     }
 
+    struct ExtractionResult {
+        let images: [PageImage]
+        let pageTitle: String
+        let trace: [String]
+        /// The page script returned nothing at all, which is recoverable by
+        /// re-sharing -- distinct from a page that genuinely has no images.
+        let scriptFailed: Bool
+    }
+
     private func extractJavaScriptResults(
-        completion: @escaping (_ images: [PageImage], _ pageTitle: String, _ pageURL: String) -> Void
+        completion: @escaping (ExtractionResult) -> Void
     ) {
-        guard let item = extensionContext?.inputItems.first as? NSExtensionItem,
+        // When the page script fails, its own trace is lost with it -- the
+        // trace travels inside the very result that went missing. So record
+        // what arrived on this side too, or an empty run explains nothing.
+        var diagnostics: [String] = []
+        let items = extensionContext?.inputItems ?? []
+        diagnostics.append("入力アイテム \(items.count)個")
+
+        func fail(_ reason: String) {
+            diagnostics.append(reason)
+            let trace = diagnostics
+            DispatchQueue.main.async {
+                completion(ExtractionResult(images: [], pageTitle: "",
+                                            trace: trace, scriptFailed: true))
+            }
+        }
+
+        guard let item = items.first as? NSExtensionItem,
               let attachments = item.attachments else {
-            DispatchQueue.main.async { completion([], "", "") }
+            fail("[ERR] 共有元からデータを受け取れませんでした")
             return
         }
+
+        diagnostics.append("添付 \(attachments.count)個")
 
         let providers = attachments.filter {
             $0.hasItemConformingToTypeIdentifier(UTType.propertyList.identifier)
         }
 
         guard !providers.isEmpty else {
-            DispatchQueue.main.async { completion([], "", "") }
+            fail("[ERR] property list 型の添付がありません")
             return
         }
 
         let group = DispatchGroup()
         var resultDict: [String: Any]?
 
+        // loadItem calls back on an arbitrary queue, and there can be more than
+        // one provider.
+        let lock = NSLock()
+        func record(_ line: String) {
+            lock.lock()
+            diagnostics.append(line)
+            lock.unlock()
+        }
+
         for provider in providers {
             group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.propertyList.identifier, options: nil) { item, _ in
-                if let dict = item as? [String: Any],
-                   let js = dict[NSExtensionJavaScriptPreprocessingResultsKey] as? [String: Any] {
+            provider.loadItem(forTypeIdentifier: UTType.propertyList.identifier, options: nil) { item, error in
+                if let error {
+                    record("[ERR] 添付の読み取りに失敗: \(error.localizedDescription)")
+                }
+                guard let dict = item as? [String: Any] else {
+                    // Safari delivers "no result" as nil or as an archived null.
+                    record("[ERR] 解析結果が空 (ページ側スクリプトが完了しなかった)")
+                    group.leave()
+                    return
+                }
+
+                if let js = dict[NSExtensionJavaScriptPreprocessingResultsKey] as? [String: Any] {
+                    lock.lock()
                     resultDict = js
+                    lock.unlock()
+                } else {
+                    record("[ERR] JS実行結果のキーがありません")
                 }
                 group.leave()
             }
@@ -77,8 +134,9 @@ final class ActionViewController: UIViewController {
 
         group.notify(queue: .main) {
             let pageTitle = resultDict?["pageTitle"] as? String ?? ""
-            let pageURL = resultDict?["pageURL"] as? String ?? ""
             let rawImages = resultDict?["images"] as? [[String: Any]] ?? []
+            var trace = diagnostics
+            trace.append(contentsOf: resultDict?["trace"] as? [String] ?? [])
 
             var images: [PageImage] = []
             images.reserveCapacity(rawImages.count)
@@ -96,7 +154,16 @@ final class ActionViewController: UIViewController {
                 ))
             }
 
-            completion(images, pageTitle, pageURL)
+            let sourceOnly = images.filter(\.isFromSourceOnly).count
+            trace.append("受け取り \(images.count)件 "
+                         + "(ページ内 \(images.count - sourceOnly) / ソース内 \(sourceOnly))")
+
+            completion(ExtractionResult(
+                images: images,
+                pageTitle: pageTitle,
+                trace: trace,
+                scriptFailed: resultDict == nil
+            ))
         }
     }
 }

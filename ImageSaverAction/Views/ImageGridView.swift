@@ -26,6 +26,9 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
 struct ImageGridView: View {
     let images: [PageImage]
     let pageTitle: String
+    /// What the page-extraction script did and found. Nothing on the device can
+    /// debug that script, so it reports on itself and the result lands here.
+    let extractionLog: [String]
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -87,6 +90,7 @@ struct ImageGridView: View {
             .preferredColorScheme(.dark)
             .sheet(isPresented: $showLogSheet) {
                 LogSheet(
+                    extractionLog: extractionLog,
                     currentLog: photoSaver.log,
                     previousLog: PersistentLog.read()
                 ) { showLogSheet = false }
@@ -424,7 +428,8 @@ private struct ThumbnailCell: View {
     }
 }
 
-private struct LogSheet: View {
+struct LogSheet: View {
+    let extractionLog: [String]
     let currentLog: [PhotoSaver.LogEntry]
     let previousLog: [String]
     let onClose: () -> Void
@@ -439,6 +444,14 @@ private struct LogSheet: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.secondary)
                         .textSelection(.enabled)
+
+                    if !extractionLog.isEmpty {
+                        section(title: "読み込み") {
+                            ForEach(Array(extractionLog.enumerated()), id: \.offset) { _, text in
+                                line(text, isError: text.hasPrefix("[ERR]"))
+                            }
+                        }
+                    }
 
                     if !currentLog.isEmpty {
                         section(title: "今回の保存") {
@@ -456,14 +469,14 @@ private struct LogSheet: View {
                         }
                     }
 
-                    if currentLog.isEmpty && previousLog.isEmpty {
+                    if extractionLog.isEmpty && currentLog.isEmpty && previousLog.isEmpty {
                         Text("まだ記録がありません")
                             .foregroundColor(.secondary)
                     }
                 }
                 .padding()
             }
-            .navigationTitle("保存ログ")
+            .navigationTitle("ログ")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showShareSheet) {
                 ActivityView(text: allLogText)
@@ -491,6 +504,10 @@ private struct LogSheet: View {
 
     private var allLogText: String {
         var lines: [String] = [RunID.label]
+        if !extractionLog.isEmpty {
+            lines.append("=== 読み込み ===")
+            lines.append(contentsOf: extractionLog)
+        }
         if !currentLog.isEmpty {
             lines.append("=== 今回の保存 ===")
             lines.append(contentsOf: currentLog.map { ($0.isError ? "[ERR] " : "") + $0.text })

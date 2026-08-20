@@ -5,6 +5,14 @@ Action.prototype = {
     run: function(params) {
         var seen = {};
         var images = [];
+        var startedAt = Date.now();
+
+        // Nothing on the device can attach a debugger to this script, so it
+        // reports on itself.
+        var trace = [];
+        function note(text) {
+            trace.push(text);
+        }
 
         // origin is "dom" for something the page actually renders, or
         // "source" for a URL only found in the markup text. Feed-style sites
@@ -72,7 +80,11 @@ Action.prototype = {
 
         // --- Element scan, run over the document and any shadow roots / same-origin iframes ---
 
-        function scanRoot(root) {
+        // `withBackgrounds` drives the expensive part: a getComputedStyle call
+        // per element, thousands of them. Advancing a slide never introduces a
+        // new CSS background, so the walk skips it and only the first and last
+        // sweeps pay for it.
+        function scanRoot(root, withBackgrounds) {
             var imgEls = root.querySelectorAll("img");
             for (var i = 0; i < imgEls.length; i++) {
                 var img = imgEls[i];
@@ -123,13 +135,15 @@ Action.prototype = {
                 addURL(svgUse[u].getAttribute("href") || svgUse[u].getAttribute("xlink:href"), 0, 0);
             }
 
+            if (!withBackgrounds) { return; }
+
             var allEls = root.querySelectorAll("*");
             var bgScanLimit = Math.min(allEls.length, 4000);
             for (var k = 0; k < bgScanLimit; k++) {
                 var el = allEls[k];
 
                 if (el.shadowRoot) {
-                    try { scanRoot(el.shadowRoot); } catch (e) {}
+                    try { scanRoot(el.shadowRoot, withBackgrounds); } catch (e) {}
                 }
 
                 var style;
@@ -149,55 +163,192 @@ Action.prototype = {
             }
         }
 
-        try { scanRoot(document); } catch (e) {}
+        function collectRendered(withBackgrounds) {
+            try { scanRoot(document, withBackgrounds); } catch (e) {}
 
-        var frames = document.querySelectorAll("iframe, frame");
-        for (var f = 0; f < frames.length; f++) {
-            try {
-                var doc = frames[f].contentDocument;
-                if (doc) { scanRoot(doc); }
-            } catch (e) {
-                // Cross-origin frame: nothing readable, skip.
+            var frames = document.querySelectorAll("iframe, frame");
+            for (var f = 0; f < frames.length; f++) {
+                try {
+                    var doc = frames[f].contentDocument;
+                    if (doc) { scanRoot(doc, withBackgrounds); }
+                } catch (e) {
+                    // Cross-origin frame: nothing readable, skip.
+                }
             }
         }
 
         // --- Raw-source scan ---
-        // Single-page apps (Next.js, Nuxt) ship their image URLs inside inline
-        // JSON and only turn some of them into elements. Sweeping the markup
-        // text finds the full-resolution originals the DOM never references.
+        // Single-page apps ship image URLs inside inline JSON and only turn
+        // some of them into elements. Sweeping the markup text finds the
+        // full-resolution originals the DOM never references.
+        function collectSource() {
+    try {
+                // Built from a backslash constant rather than written inline: the
+                // patterns below are dense with escapes and easy to corrupt.
+                var BS = String.fromCharCode(92);
 
-        try {
-            // Built from a backslash constant rather than written inline: the
-            // patterns below are dense with escapes and easy to corrupt.
-            var BS = String.fromCharCode(92);
+                // Inline JSON escapes its slashes; undo both spellings.
+                var html = document.documentElement.innerHTML
+                    .split(BS + "u002F").join("/")
+                    .split(BS + "u002f").join("/")
+                    .split(BS + "/").join("/");
 
-            // Inline JSON escapes its slashes; undo both spellings.
-            var html = document.documentElement.innerHTML
-                .split(BS + "u002F").join("/")
-                .split(BS + "u002f").join("/")
-                .split(BS + "/").join("/");
+                // Characters a URL cannot contain: whitespace, the three quote
+                // styles, brackets and braces.
+                var QUOTES = String.fromCharCode(34) + String.fromCharCode(39) + String.fromCharCode(96);
+                var CLASS = "[^" + BS + "s" + QUOTES + "<>{}" + BS + "[" + BS + "]]";
+                var IMAGE_URL = new RegExp(
+                    "https?://" + CLASS + "+?" + BS + ".(?:jpe?g|png|gif|webp|heic|heif|bmp|svg|avif)" +
+                    "(?:" + BS + "?" + CLASS + "*)?", "gi");
 
-            // Characters a URL cannot contain: whitespace, the three quote
-            // styles, brackets and braces.
-            var QUOTES = String.fromCharCode(34) + String.fromCharCode(39) + String.fromCharCode(96);
-            var CLASS = "[^" + BS + "s" + QUOTES + "<>{}" + BS + "[" + BS + "]]";
-            var IMAGE_URL = new RegExp(
-                "https?://" + CLASS + "+?" + BS + ".(?:jpe?g|png|gif|webp|heic|heif|bmp|svg|avif)" +
-                "(?:" + BS + "?" + CLASS + "*)?", "gi");
-
-            var hit;
-            var found = 0;
-            while ((hit = IMAGE_URL.exec(html)) !== null && found < 800) {
-                addURL(hit[0], 0, 0, "source");
-                found++;
+                var hit;
+                var found = 0;
+                var beforeSource = images.length;
+                while ((hit = IMAGE_URL.exec(html)) !== null && found < 800) {
+                    addURL(hit[0], 0, 0, "source");
+                    found++;
+                }
+                note("ソース走査: 一致 " + found + "件 / 新規 "
+                     + (images.length - beforeSource) + "件");
+            } catch (e) {
+                note("[ERR] ソース走査に失敗: " + e);
             }
-        } catch (e) {}
+        }
 
-        params.completionFunction({
-            "images": images,
-            "pageTitle": document.title || "",
-            "pageURL": document.URL || ""
-        });
+        // --- Carousel advance -------------------------------------------
+        //
+        // Instagram keeps only the visible slide and its neighbours in the DOM
+        // and the rest is nowhere in the page source, so the slides can only be
+        // reached by clicking through. An earlier attempt at this returned
+        // nothing at all in half of all runs: the walk has to finish
+        // asynchronously, and Safari can freeze the page's timers once the
+        // share sheet covers it, so completionFunction never ran.
+        //
+        // What makes it affordable now is that the image itself is not needed
+        // -- only its URL, which React puts in the DOM as soon as it renders
+        // the slide. Waiting a frame or two instead of for a download cuts the
+        // asynchronous window from ~1.9s to well under one second.
+
+        var STEP_WAIT = 90;
+        var MAX_STEPS = 8;
+        var BUDGET = 700;
+        var BACKSTOP = 900;
+        var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
+
+        var CAROUSEL_HOSTS = ["instagram.com"];
+
+        function hostWalksCarousels() {
+            var host = (document.location.hostname || "").toLowerCase();
+            for (var i = 0; i < CAROUSEL_HOSTS.length; i++) {
+                var allowed = CAROUSEL_HOSTS[i];
+                if (host === allowed || host.slice(-(allowed.length + 1)) === "." + allowed) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function startingSlide() {
+            var match = /[?&]img_index=(\d+)/.exec(document.URL);
+            return match ? match[1] + "枚目" : "不明";
+        }
+
+        function findNextControl() {
+            var candidates = document.querySelectorAll("[aria-label]");
+            for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                if (!NEXT_LABEL.test((el.getAttribute("aria-label") || "").trim())) { continue; }
+                var role = (el.getAttribute("role") || "").toLowerCase();
+                if (el.tagName !== "BUTTON" && role !== "button") { continue; }
+                // Never click a link: "next" on a paginated page navigates away,
+                // which would abandon the extraction entirely.
+                if (el.tagName === "A" || el.closest("a")) { continue; }
+                if (!el.offsetParent) { continue; }
+                return el;
+            }
+            return null;
+        }
+
+        // Compared without the query string: the slide number lives there
+        // (?img_index=N) and changing it is not a navigation.
+        function pageIdentity() {
+            return document.location.origin + document.location.pathname;
+        }
+
+        var startIdentity = pageIdentity();
+        var handedOff = false;
+        var steps = 0;
+
+        function handOff(reason) {
+            if (handedOff) { return; }
+            handedOff = true;
+            collectRendered(true);
+            if (reason) { note(reason); }
+            collectSource();
+            note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");
+            params.completionFunction({
+                "images": images,
+                "pageTitle": document.title || "",
+                "pageURL": document.URL || "",
+                "trace": trace
+            });
+        }
+
+        function step() {
+            if (handedOff) { return; }
+            if (steps >= MAX_STEPS || Date.now() - startedAt > BUDGET) {
+                handOff("上限に達したため終了 (" + steps + "回送り)");
+                return;
+            }
+
+            var control = findNextControl();
+            if (!control) {
+                handOff(steps === 0
+                        ? "「次へ」ボタンが無いため送りは未実行"
+                        : "「次へ」ボタンが消えたため終了 (" + steps + "回送り)");
+                return;
+            }
+
+            var before = images.length;
+            try {
+                control.click();
+            } catch (e) {
+                handOff("[ERR] クリックに失敗: " + e);
+                return;
+            }
+            steps++;
+
+            setTimeout(function() {
+                if (handedOff) { return; }
+                if (pageIdentity() !== startIdentity) {
+                    handOff("[ERR] クリックでページが遷移したため中断");
+                    return;
+                }
+                collectRendered(false);
+                note("送り" + steps + "回目: +" + (images.length - before) + "件");
+                step();
+            }, STEP_WAIT);
+        }
+
+        // Anything escaping here would leave the host with no result at all,
+        // which is indistinguishable from the script never having run.
+        try {
+            collectRendered(true);
+            note("URL: " + document.URL);
+            note("開始スライド: " + startingSlide());
+            note("img要素 " + document.querySelectorAll("img").length
+                 + "個 / 初回スキャン " + images.length + "件");
+
+            if (!hostWalksCarousels()) {
+                handOff("カルーセル送りの対象サイトではないため実行しない");
+            } else {
+                setTimeout(function() { handOff("時間切れ"); }, BACKSTOP);
+                step();
+            }
+        } catch (e) {
+            try { note("[ERR] 抽出スクリプトで例外: " + e); } catch (ignored) {}
+            handOff(null);
+        }
     },
 
     finalize: function(params) {}
