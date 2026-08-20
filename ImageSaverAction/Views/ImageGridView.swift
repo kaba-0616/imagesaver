@@ -18,10 +18,10 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
         switch self {
         case .all: return 0
         case .medium: return 100
-        // 600 clears site furniture outright -- favicons, avatars and app-badge
+        // 650 clears site furniture outright -- favicons, avatars and app-badge
         // artwork top out around 180 -- without reaching the ~950px copies a
         // phone-sized layout serves for real photographs.
-        case .large: return 600
+        case .large: return 650
         }
     }
 
@@ -31,7 +31,7 @@ enum SizeFilter: Int, CaseIterable, Identifiable {
         switch self {
         case .all: return "すべて表示"
         case .medium: return "小を除外 (100px未満)"
-        case .large: return "中・小を除外 (600px未満)"
+        case .large: return "中・小を除外 (650px未満)"
         }
     }
 }
