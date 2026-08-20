@@ -6,7 +6,9 @@ enum PersistentLog {
     private static let key = "lastSaveLog"
 
     static func write(_ entries: [PhotoSaver.LogEntry]) {
-        let lines = entries.map { entry in
+        // Stamped with the run it came from, so the previous record is never
+        // mistaken for part of the current one.
+        let lines = [RunID.label] + entries.map { entry in
             (entry.isError ? "[ERR] " : "") + entry.text
         }
         UserDefaults.standard.set(lines, forKey: key)

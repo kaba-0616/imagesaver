@@ -99,8 +99,10 @@ final class ActionViewController: UIViewController {
                 guard let dict = item as? [String: Any] else {
                     // nil here means the page script never completed: an
                     // overrunning script has its result discarded outright.
-                    record(item == nil
-                           ? "[ERR] 添付が nil (ページ側スクリプトが完了せず破棄された)"
+                    // Safari also delivers "no result" as an archived null
+                    // rather than nil, which looked like a hex dump in the log.
+                    record(item == nil || item is NSData
+                           ? "[ERR] 解析結果が空 (ページ側スクリプトが完了しなかった)"
                            : "[ERR] 想定外の型: \(String(describing: item))")
                     group.leave()
                     return

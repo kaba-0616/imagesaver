@@ -479,6 +479,11 @@ private struct LogSheet: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    Text(RunID.label)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+
                     if !extractionLog.isEmpty {
                         section(title: "読み込み") {
                             ForEach(Array(extractionLog.enumerated()), id: \.offset) { _, text in
@@ -540,7 +545,7 @@ private struct LogSheet: View {
     }
 
     private var allLogText: String {
-        var lines: [String] = []
+        var lines: [String] = [RunID.label]
         if !extractionLog.isEmpty {
             lines.append("=== 読み込み ===")
             lines.append(contentsOf: extractionLog)

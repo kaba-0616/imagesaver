@@ -182,11 +182,6 @@ Action.prototype = {
             }
         }
 
-        collectRendered();
-        note("URL: " + document.URL);
-        note("img要素 " + document.querySelectorAll("img").length
-             + "個 / 初回スキャン " + images.length + "件");
-
         function collectSource() {
             // --- Raw-source scan ---
             // Single-page apps (Next.js, Nuxt) ship their image URLs inside inline
@@ -236,6 +231,21 @@ Action.prototype = {
 
         var finished = false;
         var settling = false;
+        // Distinct from `finished`, which is set on entry to block re-entrant
+        // timers. This one records that the host actually received something,
+        // so a failure part-way through finish() can still be recovered from.
+        var handedOff = false;
+
+        function handOff() {
+            if (handedOff) { return; }
+            handedOff = true;
+            params.completionFunction({
+                "images": images,
+                "pageTitle": document.title || "",
+                "pageURL": document.URL || "",
+                "trace": trace
+            });
+        }
 
         /// Ends the walk, but only after giving images requested by the last
         /// step time to arrive. Without this the final slide is regularly lost:
@@ -263,22 +273,28 @@ Action.prototype = {
                  + "個 / srcなしimg " + countSourcelessImages() + "個");
             note("合計 " + images.length + "件 / 所要 "
                  + (Date.now() - startedAt) + "ms");
-            params.completionFunction({
-                "images": images,
-                "pageTitle": document.title || "",
-                "pageURL": document.URL || "",
-                "trace": trace
-            });
+            handOff();
         }
 
         var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
-        var PREV_LABEL = /^(prev|previous|前へ|前の.{0,6})$/i;
+        var PREV_LABEL = /^(prev|previous|back|前へ|戻る|前の.{0,6})$/i;
 
         function findNextControl() { return findControl(NEXT_LABEL, null); }
 
         function findPrevControl() {
             if (!galleryScope) {
-                note("送りボタンの位置が不明なため、戻り方向は実行しない");
+                galleryScope = inferScopeFromLargestImage();
+                if (galleryScope && !scopeReported) {
+                    scopeReported = true;
+                    note("送りボタン未検出のため、最大画像の親要素を探索範囲にする ("
+                         + galleryScope.tagName + ")");
+                }
+            }
+            if (!galleryScope) {
+                if (!scopeReported) {
+                    scopeReported = true;
+                    note("探索範囲を特定できないため、戻り方向は実行しない");
+                }
                 return null;
             }
             return findControl(PREV_LABEL, galleryScope);
@@ -372,23 +388,44 @@ Action.prototype = {
         var idleSteps = 0;
         var missingChecks = 0;
 
-        // Where the gallery's own controls live, learned from the forward pass.
-        // The backward pass is confined to it: a stray "previous" elsewhere on
-        // the page is far more likely to be site navigation, and clicking that
-        // destroys this script along with the page.
+        // Where the gallery's own controls live. The backward pass is confined
+        // to it: a page's "back" control is navigation, and clicking that
+        // destroys this script along with the page, while the same label inside
+        // the gallery is the slide arrow.
         var galleryScope = null;
+        var scopeReported = false;
 
-        function rememberScope(control) {
-            var container = control.closest("article, [role='dialog'], main, section");
-            if (container) {
-                galleryScope = container;
-                return;
-            }
-            var node = control;
+        function containerOf(element) {
+            var container = element.closest("article, [role='dialog'], main, section");
+            if (container) { return container; }
+            var node = element;
             for (var up = 0; up < 6 && node.parentElement; up++) {
                 node = node.parentElement;
             }
-            galleryScope = node;
+            return node;
+        }
+
+        function rememberScope(control) {
+            galleryScope = containerOf(control);
+        }
+
+        /// Derives the scope from the artwork instead of the arrows. Sharing
+        /// from the last slide means the forward control never appears, and
+        /// keying off it left the backward pass with nowhere to look -- exactly
+        /// the case the backward pass exists for.
+        function inferScopeFromLargestImage() {
+            var imgs = document.querySelectorAll("img");
+            var best = null;
+            var bestArea = 0;
+            for (var i = 0; i < imgs.length; i++) {
+                var rect = imgs[i].getBoundingClientRect();
+                var area = rect.width * rect.height;
+                if (area > bestArea) {
+                    bestArea = area;
+                    best = imgs[i];
+                }
+            }
+            return best ? containerOf(best) : null;
         }
 
         function endPass(reason) {
@@ -508,15 +545,27 @@ Action.prototype = {
             return false;
         }
 
-        if (!hostWalksCarousels()) {
-            note("カルーセル送りの対象サイトではないため実行しない ("
-                 + document.location.hostname + ")");
-            finish();
-        } else {
-            // Backstop: the extension would hang forever if completionFunction
-            // never ran, so guarantee it does.
-            setTimeout(finish, 2500);
-            step();
+        // Anything escaping here would leave the host with no result at all,
+        // which is indistinguishable from the script never having run.
+        try {
+            collectRendered();
+            note("URL: " + document.URL);
+            note("img要素 " + document.querySelectorAll("img").length
+                 + "個 / 初回スキャン " + images.length + "件");
+
+            if (!hostWalksCarousels()) {
+                note("カルーセル送りの対象サイトではないため実行しない ("
+                     + document.location.hostname + ")");
+                finish();
+            } else {
+                // Backstop: the extension would hang forever if
+                // completionFunction never ran, so guarantee it does.
+                setTimeout(finish, 2500);
+                step();
+            }
+        } catch (e) {
+            try { note("[ERR] 抽出スクリプトで例外: " + e); } catch (ignored) {}
+            handOff();
         }
     },
 
