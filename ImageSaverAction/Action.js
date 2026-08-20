@@ -78,6 +78,11 @@ Action.prototype = {
             return null;
         }
 
+        // Anything drawn in a box smaller than this is an icon, whatever the
+        // size of the file behind it.
+        var SPRITE_MIN_BOX = 60;
+        var spritesSkipped = 0;
+
         // --- Element scan, run over the document and any shadow roots / same-origin iframes ---
 
         // `withBackgrounds` drives the expensive part: a getComputedStyle call
@@ -154,6 +159,16 @@ Action.prototype = {
                 }
                 var bg = style && style.backgroundImage;
                 if (bg && bg.indexOf("url(") !== -1) {
+                    // A sprite sheet is one large file shown through an
+                    // icon-sized window, so the element's own box gives it
+                    // away. Instagram's carousel arrows use one, and it lands
+                    // in the grid as a collage of unrelated icons that no size
+                    // threshold can separate from a photograph.
+                    var rect = el.getBoundingClientRect();
+                    if (rect.width < SPRITE_MIN_BOX && rect.height < SPRITE_MIN_BOX) {
+                        spritesSkipped++;
+                        continue;
+                    }
                     var re = /url\(["']?([^"')]+)["']?\)/g;
                     var m;
                     while ((m = re.exec(bg)) !== null) {
@@ -358,6 +373,9 @@ Action.prototype = {
             collectRendered(true);
             if (reason) { note(reason); }
             collectSource();
+            if (spritesSkipped > 0) {
+                note("アイコン枠の背景画像を除外: " + spritesSkipped + "件");
+            }
             note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");
             params.completionFunction({
                 "images": images,
