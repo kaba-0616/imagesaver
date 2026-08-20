@@ -9,6 +9,10 @@ struct PageImage: Identifiable, Hashable {
     /// full-resolution original, but on feed-style sites also a lot of images
     /// belonging to other posts.
     let isFromSourceOnly: Bool
+    /// A video's thumbnail rather than a picture of its own. Instagram serves
+    /// these from the same CDN under the same naming as photographs, so the
+    /// only thing that separates them is their tie to a <video> in the DOM.
+    let isVideoPoster: Bool
 
     var formatLabel: String {
         switch url.pathExtension.lowercased() {

@@ -150,7 +150,8 @@ final class ActionViewController: UIViewController {
                     url: url,
                     width: width,
                     height: height,
-                    isFromSourceOnly: origin == "source"
+                    isFromSourceOnly: origin == "source",
+                    isVideoPoster: origin == "video"
                 ))
             }
 

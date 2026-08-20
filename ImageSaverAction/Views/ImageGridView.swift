@@ -56,6 +56,10 @@ struct ImageGridView: View {
     /// from unrelated posts in their payload, and including them makes the
     /// grid look like it scraped the wrong page.
     @State private var includeSourceOnly = false
+    /// Off by default: a carousel that mixes photos and videos would otherwise
+    /// hand back a still frame for every video, which is not what "save the
+    /// pictures on this page" means.
+    @State private var includeVideoPosters = false
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
 
@@ -68,6 +72,7 @@ struct ImageGridView: View {
             // Already-saved images drop out of the grid so it's obvious what is left to do.
             guard !photoSaver.savedImageIDs.contains(image.id) else { return false }
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
+            guard includeVideoPosters || !image.isVideoPoster else { return false }
             guard sizeFilter != .all else { return true }
             let known = longestSide(of: image)
             return known == 0 || known >= sizeFilter.minimumPixels
@@ -221,6 +226,19 @@ struct ImageGridView: View {
                         } else {
                             Text("ソース内の画像: なし")
                         }
+
+                        if videoPosterCount > 0 {
+                            Button {
+                                includeVideoPosters.toggle()
+                            } label: {
+                                if includeVideoPosters {
+                                    Label("動画のサムネイルも表示 (\(videoPosterCount)件)",
+                                          systemImage: "checkmark")
+                                } else {
+                                    Text("動画のサムネイルも表示 (\(videoPosterCount)件)")
+                                }
+                            }
+                        }
                     } label: {
                         // Filled while anything is being held back, so hidden
                         // images are discoverable without opening the menu.
@@ -333,13 +351,19 @@ struct ImageGridView: View {
     /// Drives the filled toolbar icon. With the bottom-bar chip gone this is
     /// the only hint that source-only images are being held back.
     private var hasHiddenImages: Bool {
-        sizeFilter != .all || (!includeSourceOnly && sourceOnlyCount > 0)
+        sizeFilter != .all
+            || (!includeSourceOnly && sourceOnlyCount > 0)
+            || (!includeVideoPosters && videoPosterCount > 0)
     }
 
     /// How many images the deeper scan found that the page does not render
     /// itself. Zero means there is nothing to offer and no toggle to show.
     private var sourceOnlyCount: Int {
         images.filter { $0.isFromSourceOnly && !photoSaver.savedImageIDs.contains($0.id) }.count
+    }
+
+    private var videoPosterCount: Int {
+        images.filter { $0.isVideoPoster && !photoSaver.savedImageIDs.contains($0.id) }.count
     }
 
     private var statusText: String {

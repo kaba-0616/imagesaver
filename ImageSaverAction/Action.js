@@ -90,6 +90,25 @@ Action.prototype = {
         // new CSS background, so the walk skips it and only the first and last
         // sweeps pay for it.
         function scanRoot(root, withBackgrounds) {
+            // Before the <img> sweep: the first origin recorded for a URL wins,
+            // and a video slide's thumbnail has to be recognised as one rather
+            // than counted as a photograph.
+            var videoEls = root.querySelectorAll("video");
+            for (var v = 0; v < videoEls.length; v++) {
+                var video = videoEls[v];
+                addURL(video.getAttribute("poster"), 0, 0, "video");
+
+                // Players commonly lay the thumbnail over the video as a plain
+                // <img> rather than using the poster attribute.
+                var container = video.parentElement;
+                if (container) {
+                    var covers = container.querySelectorAll("img");
+                    for (var c = 0; c < covers.length; c++) {
+                        addURL(covers[c].currentSrc || covers[c].src, 0, 0, "video");
+                    }
+                }
+            }
+
             var imgEls = root.querySelectorAll("img");
             for (var i = 0; i < imgEls.length; i++) {
                 var img = imgEls[i];
@@ -109,11 +128,9 @@ Action.prototype = {
                 addURL(bestFromSrcset(src.getAttribute("srcset")) || src.getAttribute("src"), 0, 0);
             }
 
-            // Video poster frames are often the highest-resolution asset on a
-            // streaming page, and they live in an attribute, not an <img>.
             var posterEls = root.querySelectorAll("[poster]");
             for (var p = 0; p < posterEls.length; p++) {
-                addURL(posterEls[p].getAttribute("poster"), 0, 0);
+                addURL(posterEls[p].getAttribute("poster"), 0, 0, "video");
             }
 
             var linkEls = root.querySelectorAll(
@@ -373,6 +390,13 @@ Action.prototype = {
             collectRendered(true);
             if (reason) { note(reason); }
             collectSource();
+            var videoThumbs = 0;
+            for (var vt = 0; vt < images.length; vt++) {
+                if (images[vt].origin === "video") { videoThumbs++; }
+            }
+            if (videoThumbs > 0) {
+                note("動画サムネイル: " + videoThumbs + "件");
+            }
             if (spritesSkipped > 0) {
                 note("アイコン枠の背景画像を除外: " + spritesSkipped + "件");
             }
