@@ -157,6 +157,23 @@ Action.prototype = {
             }
         }
 
+        /// Names the files the source sweep turned up. Whether a carousel's
+        /// other slides are hiding in the page payload cannot be told from
+        /// counts alone, and hunting for them through the grid is tedious.
+        function noteSourceSamples() {
+            var names = [];
+            for (var i = 0; i < images.length && names.length < 12; i++) {
+                if (images[i].origin !== "source") { continue; }
+                var name = images[i].url.split("?")[0].split("/").pop();
+                // Short names are site furniture; content files are long.
+                if (name.length < 20) { continue; }
+                names.push(name.length > 46 ? name.slice(0, 46) + "…" : name);
+            }
+            note(names.length
+                 ? "ソース内のファイル名: " + names.join(" / ")
+                 : "ソース内に長いファイル名は無し");
+        }
+
         /// An <img> the page has created but not yet pointed at a file. A
         /// slide caught in this state is invisible to the scan.
         function countSourcelessImages() {
@@ -166,6 +183,19 @@ Action.prototype = {
                 if (!imgs[i].currentSrc && !imgs[i].src) { count++; }
             }
             return count;
+        }
+
+        function noteRenderedSamples() {
+            var names = [];
+            for (var i = 0; i < images.length && names.length < 6; i++) {
+                if (images[i].origin === "source") { continue; }
+                var name = images[i].url.split("?")[0].split("/").pop();
+                if (name.length < 20) { continue; }
+                names.push(name.length > 46 ? name.slice(0, 46) + "…" : name);
+            }
+            note(names.length
+                 ? "ページ内のファイル名: " + names.join(" / ")
+                 : "ページ内に長いファイル名は無し");
         }
 
         function collectRendered() {
@@ -216,6 +246,7 @@ Action.prototype = {
                 }
                 note("ソース走査: HTML " + html.length + "文字 / 一致 " + found
                      + "件 / 新規 " + (images.length - beforeSource) + "件");
+                noteSourceSamples();
             } catch (e) {
                 note("[ERR] ソース走査に失敗: " + e);
             }
@@ -268,6 +299,7 @@ Action.prototype = {
             finished = true;
             collectRendered();
             collectSource();
+            noteRenderedSamples();
             note("最終DOM: img " + document.querySelectorAll("img").length
                  + "個 / video " + document.querySelectorAll("video").length
                  + "個 / srcなしimg " + countSourcelessImages() + "個");
