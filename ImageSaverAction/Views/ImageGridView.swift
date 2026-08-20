@@ -47,9 +47,33 @@ struct ImageGridView: View {
             guard !photoSaver.savedImageIDs.contains(image.id) else { return false }
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard sizeFilter != .all else { return true }
-            let known = max(image.width, image.height)
+            let known = longestSide(of: image)
             return known == 0 || known >= sizeFilter.rawValue
         }
+    }
+
+    /// Prefers the real pixel size read from the downloaded file. Many images
+    /// are found through tags that carry no dimensions (apple-touch-icon, meta,
+    /// preload), so the DOM's own numbers are 0 for exactly the site furniture
+    /// the filter is meant to remove. This is also the size on the badge, so
+    /// the filter matches what is on screen.
+    private func longestSide(of image: PageImage) -> Int {
+        if let pixels = loader.pixelSizes[image.id] {
+            return Int(max(pixels.width, pixels.height))
+        }
+        return max(image.width, image.height)
+    }
+
+    /// Selection survives filter changes, so it can name images that are no
+    /// longer on screen. Everything the buttons act on is scoped to what is
+    /// actually visible -- otherwise the count is wrong and, worse, saving
+    /// writes images the filter was hiding.
+    private var selectedVisible: [PageImage] {
+        visibleImages.filter { selected.contains($0.id) }
+    }
+
+    private var allVisibleSelected: Bool {
+        !visibleImages.isEmpty && visibleImages.allSatisfy { selected.contains($0.id) }
     }
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
@@ -246,11 +270,11 @@ struct ImageGridView: View {
             .font(.system(size: 11, design: .monospaced))
 
             HStack {
-                Button(selected.count == visibleImages.count ? "選択解除" : "全て選択") {
-                    if selected.count == visibleImages.count {
-                        selected.removeAll()
+                Button(allVisibleSelected ? "選択解除" : "全て選択") {
+                    if allVisibleSelected {
+                        selected.subtract(visibleImages.map(\.id))
                     } else {
-                        selected = Set(visibleImages.map(\.id))
+                        selected.formUnion(visibleImages.map(\.id))
                     }
                 }
                 .disabled(visibleImages.isEmpty)
@@ -258,17 +282,17 @@ struct ImageGridView: View {
                 Spacer()
 
                 Button {
-                    let targets = images.filter { selected.contains($0.id) }
+                    let targets = selectedVisible
                     Task {
                         await photoSaver.save(targets)
                         // Saved tiles leave the grid, so drop them from the selection.
                         selected.subtract(photoSaver.savedImageIDs)
                     }
                 } label: {
-                    Text("保存する (\(selected.count))")
+                    Text("保存する (\(selectedVisible.count))")
                         .bold()
                 }
-                .disabled(selected.isEmpty)
+                .disabled(selectedVisible.isEmpty)
             }
         }
         .padding()
