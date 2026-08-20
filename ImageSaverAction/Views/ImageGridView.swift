@@ -227,6 +227,8 @@ struct ImageGridView: View {
                             Text("ソース内の画像: なし")
                         }
 
+                        // Always present, even at zero: a missing entry is
+                        // indistinguishable from the scan having found nothing.
                         if videoPosterCount > 0 {
                             Button {
                                 includeVideoPosters.toggle()
@@ -238,6 +240,8 @@ struct ImageGridView: View {
                                     Text("動画のサムネイルも表示 (\(videoPosterCount)件)")
                                 }
                             }
+                        } else {
+                            Text("動画のサムネイル: なし")
                         }
                     } label: {
                         // Filled while anything is being held back, so hidden
