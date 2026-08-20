@@ -18,6 +18,13 @@ Action.prototype = {
         // "source" for a URL only found in the markup text. Feed-style sites
         // keep many unrelated images in their payload, so the UI hides the
         // latter unless asked for.
+        // Interface artwork -- spinners, play buttons, placeholders -- served
+        // from a host's static-resource path. Content never comes from these,
+        // and the files are ordinary PNGs of ordinary size, so nothing else
+        // distinguishes them from a picture.
+        var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\//i;
+        var uiAssetsSkipped = 0;
+
         function addURL(url, width, height, origin) {
             if (!url) { return; }
             url = String(url).trim();
@@ -25,6 +32,10 @@ Action.prototype = {
             try {
                 url = new URL(url, document.baseURI).href;
             } catch (e) {
+                return;
+            }
+            if (UI_ASSET_PATH.test(url)) {
+                uiAssetsSkipped++;
                 return;
             }
             if (seen[url]) { return; }
@@ -197,6 +208,23 @@ Action.prototype = {
                         addURL(m[1], 0, 0);
                     }
                 }
+            }
+        }
+
+        /// Names the files that made it into the grid, so anything unwanted
+        /// that survives the filters can be identified from the log alone.
+        function noteRenderedFilenames() {
+            var names = [];
+            var seenNames = {};
+            for (var i = 0; i < images.length && names.length < 12; i++) {
+                if (images[i].origin !== "dom") { continue; }
+                var name = images[i].url.split("?")[0].split("/").pop();
+                if (name.length < 12 || seenNames[name]) { continue; }
+                seenNames[name] = true;
+                names.push(name.length > 46 ? name.slice(0, 46) + "…" : name);
+            }
+            if (names.length) {
+                note("ページ内のファイル名(" + names.length + "種): " + names.join(" / "));
             }
         }
 
@@ -413,6 +441,10 @@ Action.prototype = {
             if (spritesSkipped > 0) {
                 note("アイコン枠の背景画像を除外: " + spritesSkipped + "件");
             }
+            if (uiAssetsSkipped > 0) {
+                note("UI部品の画像を除外: " + uiAssetsSkipped + "件");
+            }
+            noteRenderedFilenames();
             note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");
             params.completionFunction({
                 "images": images,
