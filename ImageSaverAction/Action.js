@@ -528,11 +528,15 @@ Action.prototype = {
             }, POLL_INTERVAL);
         }
 
-        // Clicking through a page is only worth its risk where the gallery is
-        // known to hide its slides from the DOM. Everywhere else this finishes
-        // synchronously, which also removes any chance of the result being
-        // discarded for running too long.
-        var CAROUSEL_HOSTS = ["instagram.com"];
+        // Disabled: the walk has to finish asynchronously, and Safari appears
+        // to freeze the page's timers once the share sheet covers it -- the
+        // callbacks then never run, completionFunction is never called, and the
+        // host receives nothing at all. That cost every image on the page, not
+        // just the extra slides, and shortening the budget did not help.
+        //
+        // The machinery below is intact. Putting "instagram.com" back in this
+        // list re-enables it.
+        var CAROUSEL_HOSTS = [];
 
         function hostWalksCarousels() {
             var host = (document.location.hostname || "").toLowerCase();
@@ -554,8 +558,7 @@ Action.prototype = {
                  + "個 / 初回スキャン " + images.length + "件");
 
             if (!hostWalksCarousels()) {
-                note("カルーセル送りの対象サイトではないため実行しない ("
-                     + document.location.hostname + ")");
+                note("カルーセル送りは無効 (同期完了)");
                 finish();
             } else {
                 // Backstop: the extension would hang forever if
