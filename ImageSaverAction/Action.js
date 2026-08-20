@@ -560,15 +560,13 @@ Action.prototype = {
             }, POLL_INTERVAL);
         }
 
-        // Disabled: the walk has to finish asynchronously, and Safari appears
-        // to freeze the page's timers once the share sheet covers it -- the
-        // callbacks then never run, completionFunction is never called, and the
-        // host receives nothing at all. That cost every image on the page, not
-        // just the extra slides, and shortening the budget did not help.
-        //
-        // The machinery below is intact. Putting "instagram.com" back in this
-        // list re-enables it.
-        var CAROUSEL_HOSTS = [];
+        // Carousels here keep only the visible slide in the DOM and the rest
+        // is nowhere in the page source either, so clicking through is the only
+        // way to reach it. The cost is that this run must finish
+        // asynchronously, and Safari sometimes freezes the page's timers once
+        // the share sheet covers it -- the callbacks never run and the host
+        // receives nothing. The extension detects that and asks for a retry.
+        var CAROUSEL_HOSTS = ["instagram.com"];
 
         function hostWalksCarousels() {
             var host = (document.location.hostname || "").toLowerCase();
@@ -590,7 +588,8 @@ Action.prototype = {
                  + "個 / 初回スキャン " + images.length + "件");
 
             if (!hostWalksCarousels()) {
-                note("カルーセル送りは無効 (同期完了)");
+                note("カルーセル送りの対象サイトではないため実行しない ("
+                     + document.location.hostname + ")");
                 finish();
             } else {
                 // Backstop: the extension would hang forever if

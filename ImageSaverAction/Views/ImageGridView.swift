@@ -467,7 +467,7 @@ private struct ThumbnailCell: View {
     }
 }
 
-private struct LogSheet: View {
+struct LogSheet: View {
     let extractionLog: [String]
     let currentLog: [PhotoSaver.LogEntry]
     let previousLog: [String]

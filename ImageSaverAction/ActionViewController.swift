@@ -17,23 +17,32 @@ final class ActionViewController: UIViewController {
         view.addSubview(loading.view)
         loading.didMove(toParent: self)
 
-        extractJavaScriptResults { [weak self] images, pageTitle, pageURL, trace in
+        extractJavaScriptResults { [weak self] result in
             guard let self else { return }
 
             loading.willMove(toParent: nil)
             loading.view.removeFromSuperview()
             loading.removeFromParent()
 
-            let rootView = ImageGridView(
-                images: images,
-                pageTitle: pageTitle,
-                extractionLog: trace,
-                onClose: { [weak self] in
-                    self?.extensionContext?.completeRequest(returningItems: nil)
-                }
-            )
+            let close: () -> Void = { [weak self] in
+                self?.extensionContext?.completeRequest(returningItems: nil)
+            }
 
-            let hosting = UIHostingController(rootView: rootView)
+            let hosting: UIHostingController<AnyView>
+            if result.scriptFailed {
+                hosting = UIHostingController(rootView: AnyView(
+                    ExtractionFailedRootView(extractionLog: result.trace, onClose: close)
+                ))
+            } else {
+                hosting = UIHostingController(rootView: AnyView(
+                    ImageGridView(
+                        images: result.images,
+                        pageTitle: result.pageTitle,
+                        extractionLog: result.trace,
+                        onClose: close
+                    )
+                ))
+            }
             self.addChild(hosting)
             hosting.view.frame = self.view.bounds
             hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -42,13 +51,17 @@ final class ActionViewController: UIViewController {
         }
     }
 
+    struct ExtractionResult {
+        let images: [PageImage]
+        let pageTitle: String
+        let trace: [String]
+        /// The page script returned nothing at all, which is recoverable by
+        /// re-sharing -- distinct from a page that genuinely has no images.
+        let scriptFailed: Bool
+    }
+
     private func extractJavaScriptResults(
-        completion: @escaping (
-            _ images: [PageImage],
-            _ pageTitle: String,
-            _ pageURL: String,
-            _ trace: [String]
-        ) -> Void
+        completion: @escaping (ExtractionResult) -> Void
     ) {
         // When the page script fails, its own trace is lost with it -- the
         // trace travels inside the very result that went missing. So record
@@ -60,7 +73,11 @@ final class ActionViewController: UIViewController {
         guard let item = items.first as? NSExtensionItem,
               let attachments = item.attachments else {
             diagnostics.append("[ERR] 共有元からデータを受け取れませんでした")
-            DispatchQueue.main.async { completion([], "", "", diagnostics) }
+            let failure = diagnostics
+            DispatchQueue.main.async {
+                completion(ExtractionResult(images: [], pageTitle: "",
+                                            trace: failure, scriptFailed: true))
+            }
             return
         }
 
@@ -76,7 +93,11 @@ final class ActionViewController: UIViewController {
 
         guard !providers.isEmpty else {
             diagnostics.append("[ERR] property list 型の添付がありません")
-            DispatchQueue.main.async { completion([], "", "", diagnostics) }
+            let failure = diagnostics
+            DispatchQueue.main.async {
+                completion(ExtractionResult(images: [], pageTitle: "",
+                                            trace: failure, scriptFailed: true))
+            }
             return
         }
 
@@ -127,7 +148,6 @@ final class ActionViewController: UIViewController {
 
         group.notify(queue: .main) {
             let pageTitle = resultDict?["pageTitle"] as? String ?? ""
-            let pageURL = resultDict?["pageURL"] as? String ?? ""
             let rawImages = resultDict?["images"] as? [[String: Any]] ?? []
             var trace = diagnostics
             trace.append(contentsOf: resultDict?["trace"] as? [String] ?? [])
@@ -155,7 +175,12 @@ final class ActionViewController: UIViewController {
             trace.append("受け取り \(images.count)件 "
                          + "(ページ内 \(images.count - sourceOnly) / ソース内 \(sourceOnly))")
 
-            completion(images, pageTitle, pageURL, trace)
+            completion(ExtractionResult(
+                images: images,
+                pageTitle: pageTitle,
+                trace: trace,
+                scriptFailed: resultDict == nil
+            ))
         }
     }
 }
