@@ -405,10 +405,17 @@ private struct LogSheet: View {
     let previousLog: [String]
     let onClose: () -> Void
 
+    @State private var showShareSheet = false
+
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    Text(RunID.label)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+
                     if !currentLog.isEmpty {
                         section(title: "今回の保存") {
                             ForEach(currentLog) { entry in
@@ -434,10 +441,20 @@ private struct LogSheet: View {
             }
             .navigationTitle("保存ログ")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showShareSheet) {
+                ActivityView(text: allLogText)
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("全部コピー") {
                         UIPasteboard.general.string = allLogText
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -449,7 +466,7 @@ private struct LogSheet: View {
     }
 
     private var allLogText: String {
-        var lines: [String] = []
+        var lines: [String] = [RunID.label]
         if !currentLog.isEmpty {
             lines.append("=== 今回の保存 ===")
             lines.append(contentsOf: currentLog.map { ($0.isError ? "[ERR] " : "") + $0.text })
@@ -478,4 +495,16 @@ private struct LogSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
     }
+}
+
+/// Hands the log text to the system share sheet. ShareLink would do this in one
+/// line, but it needs iOS 16 and this target still supports 15.
+private struct ActivityView: UIViewControllerRepresentable {
+    let text: String
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [text], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
