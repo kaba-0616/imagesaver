@@ -7,10 +7,20 @@ enum DisplayMode: String, CaseIterable {
 
 enum SizeFilter: Int, CaseIterable, Identifiable {
     case all = 0
-    case medium = 100
-    case large = 300
+    case medium = 1
+    case large = 2
 
     var id: Int { rawValue }
+
+    /// Shortest acceptable longest-side, in pixels. Kept separate from the raw
+    /// value, which is persisted and must stay stable if these are retuned.
+    var minimumPixels: Int {
+        switch self {
+        case .all: return 0
+        case .medium: return 100
+        case .large: return 300
+        }
+    }
 
     /// Menu wording. The pixel threshold is kept as a hint so the tiers are
     /// not purely relative.
@@ -36,13 +46,19 @@ struct ImageGridView: View {
 
     @State private var selected: Set<Int> = []
     @State private var displayMode: DisplayMode = .grid
-    @State private var sizeFilter: SizeFilter = .all
+    /// Remembered between launches: re-picking the same filter on every share
+    /// was the most repeated interaction in the app.
+    @AppStorage("sizeFilter") private var storedSizeFilter = SizeFilter.all.rawValue
     /// Off by default: feed-style sites (Instagram and friends) keep images
     /// from unrelated posts in their payload, and including them makes the
     /// grid look like it scraped the wrong page.
     @State private var includeSourceOnly = false
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
+
+    private var sizeFilter: SizeFilter {
+        SizeFilter(rawValue: storedSizeFilter) ?? .all
+    }
 
     private var visibleImages: [PageImage] {
         images.filter { image in
@@ -51,7 +67,7 @@ struct ImageGridView: View {
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard sizeFilter != .all else { return true }
             let known = longestSide(of: image)
-            return known == 0 || known >= sizeFilter.rawValue
+            return known == 0 || known >= sizeFilter.minimumPixels
         }
     }
 
@@ -173,7 +189,7 @@ struct ImageGridView: View {
                     Menu {
                         ForEach(SizeFilter.allCases) { filter in
                             Button {
-                                sizeFilter = filter
+                                storedSizeFilter = filter.rawValue
                             } label: {
                                 if filter == sizeFilter {
                                     Label(filter.label, systemImage: "checkmark")
@@ -181,6 +197,26 @@ struct ImageGridView: View {
                                     Text(filter.label)
                                 }
                             }
+                        }
+
+                        Divider()
+
+                        // Always present, even at zero: otherwise a missing
+                        // entry is indistinguishable from the scan having
+                        // found nothing.
+                        if sourceOnlyCount > 0 {
+                            Button {
+                                includeSourceOnly.toggle()
+                            } label: {
+                                if includeSourceOnly {
+                                    Label("ソース内の画像も表示 (\(sourceOnlyCount)件)",
+                                          systemImage: "checkmark")
+                                } else {
+                                    Text("ソース内の画像も表示 (\(sourceOnlyCount)件)")
+                                }
+                            }
+                        } else {
+                            Text("ソース内の画像: なし")
                         }
                     } label: {
                         // Filled while anything is being held back, so hidden
@@ -253,19 +289,6 @@ struct ImageGridView: View {
                     .lineLimit(1)
                 Spacer()
 
-                // Instagram-style carousels keep only the visible slide and its
-                // neighbours in the DOM; the rest of the post lives in the page
-                // payload. Buried in the filter menu that was undiscoverable,
-                // so the count sits here instead.
-                if sourceOnlyCount > 0 {
-                    Button(includeSourceOnly
-                           ? "ソース内を隠す"
-                           : "ソース内 +\(sourceOnlyCount)") {
-                        includeSourceOnly.toggle()
-                    }
-                    .font(.system(size: 11))
-                }
-
                 // Always available: the previous run's log persists even if the
                 // extension was killed before the result could be shown.
                 Button("ログ") { showLogSheet = true }
@@ -304,8 +327,10 @@ struct ImageGridView: View {
         .overlay(Divider().opacity(0.3), alignment: .top)
     }
 
+    /// Drives the filled toolbar icon. With the bottom-bar chip gone this is
+    /// the only hint that source-only images are being held back.
     private var hasHiddenImages: Bool {
-        sizeFilter != .all
+        sizeFilter != .all || (!includeSourceOnly && sourceOnlyCount > 0)
     }
 
     /// How many images the deeper scan found that the page does not render
