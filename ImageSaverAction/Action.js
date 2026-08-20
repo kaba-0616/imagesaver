@@ -230,10 +230,11 @@ Action.prototype = {
         // asynchronous window from ~1.9s to well under one second.
 
         var STEP_WAIT = 90;
-        var MAX_STEPS = 8;
-        var BUDGET = 700;
-        var BACKSTOP = 900;
+        var MAX_STEPS = 14;
+        var BUDGET = 900;
+        var BACKSTOP = 1200;
         var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
+        var PREV_LABEL = /^(prev|previous|back|前へ|戻る|前の.{0,6})$/i;
 
         var CAROUSEL_HOSTS = ["instagram.com"];
 
@@ -248,16 +249,67 @@ Action.prototype = {
             return false;
         }
 
+        function startingSlideIndex() {
+            var match = /[?&]img_index=(\d+)/.exec(document.URL);
+            return match ? parseInt(match[1], 10) : 1;
+        }
+
         function startingSlide() {
             var match = /[?&]img_index=(\d+)/.exec(document.URL);
-            return match ? match[1] + "枚目" : "不明";
+            return match ? match[1] + "枚目" : "不明 (1枚目とみなす)";
+        }
+
+        // Where the gallery's own controls live. The backward pass is confined
+        // to it: a page's "back" control is navigation, and clicking that
+        // destroys this script along with the page, while the same label inside
+        // the gallery is the slide arrow.
+        var galleryScope = null;
+
+        function containerOf(element) {
+            var container = element.closest("article, [role='dialog'], main, section");
+            if (container) { return container; }
+            var node = element;
+            for (var up = 0; up < 6 && node.parentElement; up++) {
+                node = node.parentElement;
+            }
+            return node;
+        }
+
+        /// Derived from the artwork rather than the arrows: sharing from the
+        /// last slide means the forward control never appears, which is exactly
+        /// when the backward pass is needed.
+        function inferScope() {
+            var imgs = document.querySelectorAll("img");
+            var best = null;
+            var bestArea = 0;
+            for (var i = 0; i < imgs.length; i++) {
+                var rect = imgs[i].getBoundingClientRect();
+                var area = rect.width * rect.height;
+                if (area > bestArea) {
+                    bestArea = area;
+                    best = imgs[i];
+                }
+            }
+            return best ? containerOf(best) : null;
+        }
+
+        function findPrevControl() {
+            if (!galleryScope) { galleryScope = inferScope(); }
+            if (!galleryScope) { return null; }
+            return findControl(PREV_LABEL, galleryScope);
         }
 
         function findNextControl() {
-            var candidates = document.querySelectorAll("[aria-label]");
+            var control = findControl(NEXT_LABEL, null);
+            if (control && !galleryScope) { galleryScope = containerOf(control); }
+            return control;
+        }
+
+        function findControl(pattern, scope) {
+            var candidates = (scope || document).querySelectorAll("[aria-label]");
             for (var i = 0; i < candidates.length; i++) {
                 var el = candidates[i];
-                if (!NEXT_LABEL.test((el.getAttribute("aria-label") || "").trim())) { continue; }
+                if (!pattern.test((el.getAttribute("aria-label") || "").trim())) { continue; }
                 var role = (el.getAttribute("role") || "").toLowerCase();
                 if (el.tagName !== "BUTTON" && role !== "button") { continue; }
                 // Never click a link: "next" on a paginated page navigates away,
@@ -279,6 +331,27 @@ Action.prototype = {
         var handedOff = false;
         var steps = 0;
 
+        // Forward first, then back only when something is actually out of
+        // reach. From slide 1 or 2 nothing earlier exists, and the DOM already
+        // holds the previous neighbour, so the second pass is pure cost.
+        var PASSES = [
+            { label: "次へ", find: findNextControl },
+            { label: "前へ", find: findPrevControl }
+        ];
+        var passIndex = 0;
+        var needsBackwardPass = startingSlideIndex() >= 3;
+
+        function endPass(reason) {
+            passIndex++;
+            if (passIndex < PASSES.length && needsBackwardPass) {
+                note(reason + " / " + PASSES[passIndex].label + "へ");
+                steps = 0;
+                step();
+            } else {
+                handOff(reason);
+            }
+        }
+
         function handOff(reason) {
             if (handedOff) { return; }
             handedOff = true;
@@ -297,15 +370,18 @@ Action.prototype = {
         function step() {
             if (handedOff) { return; }
             if (steps >= MAX_STEPS || Date.now() - startedAt > BUDGET) {
-                handOff("上限に達したため終了 (" + steps + "回送り)");
+                handOff("上限に達したため終了 (" + PASSES[passIndex].label + " "
+                        + steps + "回送り)");
                 return;
             }
 
-            var control = findNextControl();
+            var pass = PASSES[passIndex];
+            var control = pass.find();
             if (!control) {
-                handOff(steps === 0
-                        ? "「次へ」ボタンが無いため送りは未実行"
-                        : "「次へ」ボタンが消えたため終了 (" + steps + "回送り)");
+                endPass(steps === 0
+                        ? "「" + pass.label + "」ボタンが無いため送りは未実行"
+                        : "「" + pass.label + "」ボタンが消えたため終了 ("
+                          + steps + "回送り)");
                 return;
             }
 
@@ -325,7 +401,7 @@ Action.prototype = {
                     return;
                 }
                 collectRendered(false);
-                note("送り" + steps + "回目: +" + (images.length - before) + "件");
+                note(pass.label + steps + "回目: +" + (images.length - before) + "件");
                 step();
             }, STEP_WAIT);
         }
@@ -338,6 +414,9 @@ Action.prototype = {
             note("開始スライド: " + startingSlide());
             note("img要素 " + document.querySelectorAll("img").length
                  + "個 / 初回スキャン " + images.length + "件");
+            note("戻り方向: " + (needsBackwardPass
+                                 ? "実行する (3枚目以降から共有)"
+                                 : "不要 (前のスライドは無いか既に取得済み)"));
 
             if (!hostWalksCarousels()) {
                 handOff("カルーセル送りの対象サイトではないため実行しない");
