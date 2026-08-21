@@ -37,6 +37,44 @@ Action.prototype = {
         var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\//i;
         var uiAssetsSkipped = 0;
 
+        // A picture wrapped in a link to some other post belongs to that post,
+        // not to this page. Instagram fills the space under a post with them,
+        // and they arrive from the same CDN under the same naming as the
+        // slides, so nothing about the URL or the size tells them apart --
+        // only what they are nested inside. Tagged "other" and hidden unless
+        // asked for, because the test is structural and the page could always
+        // wrap its own artwork in a link too.
+
+        /// The page a path refers to, ignoring anything below it: for
+        /// Instagram that is /p/<shortcode>, and /p/<shortcode>/media is the
+        /// same post rather than a different one.
+        function pageKey(pathname) {
+            var parts = String(pathname || "").split("/");
+            var key = "";
+            var kept = 0;
+            for (var i = 0; i < parts.length && kept < 2; i++) {
+                if (!parts[i]) { continue; }
+                key += "/" + parts[i];
+                kept++;
+            }
+            return key;
+        }
+
+        var thisPageKey = pageKey(document.location.pathname);
+
+        /// Confined to the carousel sites: elsewhere a thumbnail that links to
+        /// its own page is ordinary gallery markup and wanted.
+        function linksElsewhere(el) {
+            if (!hostWalksCarousels()) { return false; }
+            var link;
+            try { link = el.closest("a[href]"); } catch (e) { return false; }
+            if (!link || !link.href) { return false; }
+            var target;
+            try { target = new URL(link.href, document.baseURI); } catch (e) { return false; }
+            if (target.origin !== document.location.origin) { return true; }
+            return pageKey(target.pathname) !== thisPageKey;
+        }
+
         function addURL(url, width, height, origin) {
             if (!url) { return; }
             url = String(url).trim();
@@ -140,10 +178,11 @@ Action.prototype = {
                     || bestFromSrcset(img.getAttribute("srcset"))
                     || bestFromSrcset(img.getAttribute("data-srcset"))
                     || fromLazyAttrs(img);
-                addURL(url, img.naturalWidth, img.naturalHeight);
+                var imgOrigin = linksElsewhere(img) ? "other" : "dom";
+                addURL(url, img.naturalWidth, img.naturalHeight, imgOrigin);
                 // The srcset may name a larger file than the one Safari picked
                 // for this viewport; offer that too.
-                addURL(bestFromSrcset(img.getAttribute("srcset")), 0, 0);
+                addURL(bestFromSrcset(img.getAttribute("srcset")), 0, 0, imgOrigin);
             }
 
             var sourceEls = root.querySelectorAll("picture source, video source, audio source");
@@ -458,6 +497,14 @@ Action.prototype = {
             }
             if (uiAssetsSkipped > 0) {
                 note("UI部品の画像を除外: " + uiAssetsSkipped + "件");
+            }
+
+            var otherPosts = 0;
+            for (var op = 0; op < images.length; op++) {
+                if (images[op].origin === "other") { otherPosts++; }
+            }
+            if (otherPosts > 0) {
+                note("別の投稿へのリンク内の画像: " + otherPosts + "件");
             }
             noteRenderedFilenames();
             note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");

@@ -152,7 +152,8 @@ final class ActionViewController: UIViewController {
                     height: height,
                     isFromSourceOnly: origin == "source",
                     isVideoPoster: origin == "video",
-                    isPageMetaImage: origin == "meta"
+                    isPageMetaImage: origin == "meta",
+                    isOtherPostImage: origin == "other"
                 ))
             }
 

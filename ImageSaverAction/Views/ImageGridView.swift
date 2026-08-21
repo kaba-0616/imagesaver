@@ -63,6 +63,9 @@ struct ImageGridView: View {
     /// Off by default: on a single-page app the page's own og:image goes stale
     /// as you navigate, so it is regularly a picture of a different page.
     @State private var includeMetaImages = false
+    /// Off by default: a thumbnail linking to another post is that post's
+    /// picture, and "save the images on this page" does not mean them.
+    @State private var includeOtherPosts = false
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
 
@@ -77,6 +80,7 @@ struct ImageGridView: View {
             guard includeSourceOnly || !image.isFromSourceOnly else { return false }
             guard includeVideoPosters || !image.isVideoPoster else { return false }
             guard includeMetaImages || !image.isPageMetaImage else { return false }
+            guard includeOtherPosts || !image.isOtherPostImage else { return false }
             guard sizeFilter != .all else { return true }
             let known = longestSide(of: image)
             return known == 0 || known >= sizeFilter.minimumPixels
@@ -216,6 +220,21 @@ struct ImageGridView: View {
                         // Always present, even at zero: otherwise a missing
                         // entry is indistinguishable from the scan having
                         // found nothing.
+                        if otherPostCount > 0 {
+                            Button {
+                                includeOtherPosts.toggle()
+                            } label: {
+                                if includeOtherPosts {
+                                    Label("別の投稿の画像も表示 (\(otherPostCount)件)",
+                                          systemImage: "checkmark")
+                                } else {
+                                    Text("別の投稿の画像も表示 (\(otherPostCount)件)")
+                                }
+                            }
+                        } else {
+                            Text("別の投稿の画像: なし")
+                        }
+
                         if sourceOnlyCount > 0 {
                             Button {
                                 includeSourceOnly.toggle()
@@ -378,6 +397,7 @@ struct ImageGridView: View {
             || (!includeSourceOnly && sourceOnlyCount > 0)
             || (!includeVideoPosters && videoPosterCount > 0)
             || (!includeMetaImages && metaImageCount > 0)
+            || (!includeOtherPosts && otherPostCount > 0)
     }
 
     /// How many images the deeper scan found that the page does not render
@@ -392,6 +412,10 @@ struct ImageGridView: View {
 
     private var metaImageCount: Int {
         images.filter { $0.isPageMetaImage && !photoSaver.savedImageIDs.contains($0.id) }.count
+    }
+
+    private var otherPostCount: Int {
+        images.filter { $0.isOtherPostImage && !photoSaver.savedImageIDs.contains($0.id) }.count
     }
 
     private var statusText: String {

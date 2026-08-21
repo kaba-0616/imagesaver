@@ -17,6 +17,11 @@ struct PageImage: Identifiable, Hashable {
     /// app does not rewrite those as you navigate, so this can be a picture
     /// from whichever page was served first.
     let isPageMetaImage: Bool
+    /// Nested inside a link pointing at a different page -- on Instagram, the
+    /// "more posts" thumbnails under a post. Same CDN, same naming and often
+    /// the same size as the slides themselves, so only the surrounding markup
+    /// separates them.
+    let isOtherPostImage: Bool
 
     var formatLabel: String {
         switch url.pathExtension.lowercased() {
