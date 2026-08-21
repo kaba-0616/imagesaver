@@ -62,10 +62,19 @@ Action.prototype = {
 
         var thisPageKey = pageKey(document.location.pathname);
 
+        /// Only a post's own page has a subject to protect. A profile page is
+        /// nothing but thumbnails linking to posts, and the feed is the same,
+        /// so there the test would empty the grid instead of tidying it.
+        var POST_PATH = /^\/(p|reel|reels|tv)\/[^\/]+/i;
+
+        function onPostPermalink() {
+            return POST_PATH.test(document.location.pathname);
+        }
+
         /// Confined to the carousel sites: elsewhere a thumbnail that links to
         /// its own page is ordinary gallery markup and wanted.
         function linksElsewhere(el) {
-            if (!hostWalksCarousels()) { return false; }
+            if (!hostWalksCarousels() || !onPostPermalink()) { return false; }
             var link;
             try { link = el.closest("a[href]"); } catch (e) { return false; }
             if (!link || !link.href) { return false; }
@@ -503,8 +512,10 @@ Action.prototype = {
             for (var op = 0; op < images.length; op++) {
                 if (images[op].origin === "other") { otherPosts++; }
             }
-            if (otherPosts > 0) {
-                note("別の投稿へのリンク内の画像: " + otherPosts + "件");
+            if (hostWalksCarousels()) {
+                note("別の投稿へのリンク内の画像: "
+                     + (onPostPermalink() ? otherPosts + "件"
+                                          : "判定なし (投稿ページではないため)"));
             }
             noteRenderedFilenames();
             note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");
