@@ -154,6 +154,16 @@ Action.prototype = {
         var SPRITE_MIN_BOX = 60;
         var spritesSkipped = 0;
 
+        // Which sweep produced each image. Two rounds of guessing went into
+        // finding out where unwanted pictures were entering from, so the
+        // script now says so outright.
+        var bySource = {};
+
+        function credit(label, mark) {
+            var added = images.length - mark;
+            if (added > 0) { bySource[label] = (bySource[label] || 0) + added; }
+        }
+
         // --- Element scan, run over the document and any shadow roots / same-origin iframes ---
 
         // `withBackgrounds` drives the expensive part: a getComputedStyle call
@@ -164,6 +174,8 @@ Action.prototype = {
             // Before the <img> sweep: the first origin recorded for a URL wins,
             // and a video slide's thumbnail has to be recognised as one rather
             // than counted as a photograph.
+            var mark = images.length;
+
             var videoEls = root.querySelectorAll("video");
             for (var v = 0; v < videoEls.length; v++) {
                 var video = videoEls[v];
@@ -180,6 +192,9 @@ Action.prototype = {
                 }
             }
 
+            credit("動画", mark);
+            mark = images.length;
+
             var imgEls = root.querySelectorAll("img");
             for (var i = 0; i < imgEls.length; i++) {
                 var img = imgEls[i];
@@ -194,23 +209,44 @@ Action.prototype = {
                 addURL(bestFromSrcset(img.getAttribute("srcset")), 0, 0, imgOrigin);
             }
 
+            credit("img", mark);
+            mark = images.length;
+
             var sourceEls = root.querySelectorAll("picture source, video source, audio source");
             for (var j = 0; j < sourceEls.length; j++) {
                 var src = sourceEls[j];
                 addURL(bestFromSrcset(src.getAttribute("srcset")) || src.getAttribute("src"), 0, 0);
             }
 
+            credit("source", mark);
+            mark = images.length;
+
             var posterEls = root.querySelectorAll("[poster]");
             for (var p = 0; p < posterEls.length; p++) {
                 addURL(posterEls[p].getAttribute("poster"), 0, 0, "video");
             }
 
+            credit("poster", mark);
+            mark = images.length;
+
             var linkEls = root.querySelectorAll(
                 "link[rel~='preload'][as='image'], link[rel~='image_src'], link[rel~='apple-touch-icon']"
             );
+            // Declared in the head, not laid out on the page. A preload for
+            // an image the page really shows has already been claimed by the
+            // <img> sweep above, so what is left here is what the page intends
+            // to display next -- on Instagram, the thumbnails for a screen the
+            // user has not opened. Given the standing of og:image there:
+            // named by the markup, not shown by it, hidden unless asked for.
+            //
+            // Only there, though. Elsewhere the leftover preload is the page's
+            // own hero art at full resolution, which is precisely what a
+            // single-page app like Lemino keeps out of the DOM and precisely
+            // why these links are scanned at all.
+            var linkOrigin = hostWalksCarousels() ? "meta" : "dom";
             for (var l = 0; l < linkEls.length; l++) {
-                addURL(linkEls[l].getAttribute("href"), 0, 0);
-                addURL(bestFromSrcset(linkEls[l].getAttribute("imagesrcset")), 0, 0);
+                addURL(linkEls[l].getAttribute("href"), 0, 0, linkOrigin);
+                addURL(bestFromSrcset(linkEls[l].getAttribute("imagesrcset")), 0, 0, linkOrigin);
             }
 
             // og:image / twitter:image are the page's key visual, often at a
@@ -229,13 +265,19 @@ Action.prototype = {
                 addURL(metaEls[mt].getAttribute("content"), 0, 0, "meta");
             }
 
+            credit("link/meta", mark);
+            mark = images.length;
+
             var svgUse = root.querySelectorAll("image");
             for (var u = 0; u < svgUse.length; u++) {
                 addURL(svgUse[u].getAttribute("href") || svgUse[u].getAttribute("xlink:href"), 0, 0);
             }
 
+            credit("svg", mark);
+
             if (!withBackgrounds) { return; }
 
+            mark = images.length;
             var allEls = root.querySelectorAll("*");
             var bgScanLimit = Math.min(allEls.length, 4000);
             for (var k = 0; k < bgScanLimit; k++) {
@@ -270,6 +312,8 @@ Action.prototype = {
                     }
                 }
             }
+
+            credit("CSS背景", mark);
         }
 
         /// Names the files that made it into the grid, so anything unwanted
@@ -516,6 +560,15 @@ Action.prototype = {
                 note("別の投稿へのリンク内の画像: "
                      + (onPostPermalink() ? otherPosts + "件"
                                           : "判定なし (投稿ページではないため)"));
+            }
+            var breakdown = [];
+            for (var key in bySource) {
+                if (Object.prototype.hasOwnProperty.call(bySource, key)) {
+                    breakdown.push(key + " " + bySource[key]);
+                }
+            }
+            if (breakdown.length) {
+                note("取得元の内訳: " + breakdown.join(" / "));
             }
             noteRenderedFilenames();
             note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");
