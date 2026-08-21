@@ -45,12 +45,19 @@ Action.prototype = {
         // asked for, because the test is structural and the page could always
         // wrap its own artwork in a link too.
 
-        /// The page a path refers to, ignoring anything below it: for
-        /// Instagram that is /p/<shortcode>, and /p/<shortcode>/media is the
-        /// same post rather than a different one.
+        // A post is reachable at two paths -- /p/<code>/ and, when you arrive
+        // from the author's profile, /<user>/p/<code>/ -- so the shortcode is
+        // the only thing that identifies it. Comparing leading path segments
+        // instead made every post by this author look like the current one.
+        var POST_PATH = /(?:^|\/)(?:p|reel|reels|tv)\/([^\/?#]+)/i;
+
+        /// What page a path names. Two paths for the same post agree; anything
+        /// below it (/p/<code>/media) agrees too.
         function pageKey(pathname) {
+            var post = POST_PATH.exec(String(pathname || ""));
+            if (post) { return "post:" + post[1]; }
             var parts = String(pathname || "").split("/");
-            var key = "";
+            var key = "path:";
             var kept = 0;
             for (var i = 0; i < parts.length && kept < 2; i++) {
                 if (!parts[i]) { continue; }
@@ -65,8 +72,6 @@ Action.prototype = {
         /// Only a post's own page has a subject to protect. A profile page is
         /// nothing but thumbnails linking to posts, and the feed is the same,
         /// so there the test would empty the grid instead of tidying it.
-        var POST_PATH = /^\/(p|reel|reels|tv)\/[^\/]+/i;
-
         function onPostPermalink() {
             return POST_PATH.test(document.location.pathname);
         }
@@ -323,10 +328,15 @@ Action.prototype = {
             var seenNames = {};
             for (var i = 0; i < images.length && names.length < 12; i++) {
                 if (images[i].origin !== "dom") { continue; }
-                var name = images[i].url.split("?")[0].split("/").pop();
+                var path = images[i].url.split("?")[0].split("/");
+                var name = path.pop();
                 if (name.length < 12 || seenNames[name]) { continue; }
                 seenNames[name] = true;
-                names.push(name.length > 46 ? name.slice(0, 46) + "…" : name);
+                // Instagram's CDN sorts by directory -- t51.2885-19 is a
+                // profile picture, t51.2885-15 a post's own media -- so the
+                // folder identifies a stray that the filename alone cannot.
+                var folder = path.pop() || "";
+                names.push(folder + "/" + (name.length > 30 ? name.slice(0, 30) + "…" : name));
             }
             if (names.length) {
                 note("ページ内のファイル名(" + names.length + "種): " + names.join(" / "));
