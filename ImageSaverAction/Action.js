@@ -409,8 +409,16 @@ Action.prototype = {
         // the slide. Waiting a frame or two instead of for a download cuts the
         // asynchronous window from ~1.9s to well under one second.
 
-        var STEP_WAIT = 90;
-        var MAX_STEPS = 14;
+        // Waiting a fixed 90ms per step meant the 900ms budget bought exactly
+        // ten steps, and a thirteen-slide post shared from the middle needs
+        // twice that. So each step now watches for the slide to actually
+        // change and moves on the moment it does. Landing early is cheap: the
+        // carousel keeps the neighbouring slide mounted, so a URL missed at
+        // one step is collected at the next -- which is why a step can report
+        // +0 and the one after it still find something.
+        var STEP_POLL = 20;
+        var STEP_MAX_WAIT = 120;
+        var MAX_STEPS = 30;
         var BUDGET = 900;
         var BACKSTOP = 1200;
         var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
@@ -473,6 +481,19 @@ Action.prototype = {
             return best ? containerOf(best) : null;
         }
 
+        /// Enough of the gallery to tell one slide from the next. Comparing
+        /// the collected count instead would stall for the full wait every
+        /// time a step lands on a slide already gathered -- which is most of
+        /// the second pass.
+        function slideSignature() {
+            var imgs = (galleryScope || document).querySelectorAll("img");
+            var sig = imgs.length + ":";
+            for (var i = 0; i < imgs.length && i < 8; i++) {
+                sig += (imgs[i].currentSrc || imgs[i].src || "").slice(-24) + ",";
+            }
+            return sig;
+        }
+
         function findPrevControl() {
             if (!galleryScope) { galleryScope = inferScope(); }
             if (!galleryScope) { return null; }
@@ -514,20 +535,30 @@ Action.prototype = {
         // Forward first, then back only when something is actually out of
         // reach. From slide 1 or 2 nothing earlier exists, and the DOM already
         // holds the previous neighbour, so the second pass is pure cost.
-        var PASSES = [
-            { label: "次へ", find: findNextControl },
-            { label: "前へ", find: findPrevControl }
-        ];
-        var passIndex = 0;
+        // Backward first. Whichever pass runs second spends its steps
+        // re-treading slides the first pass already collected, and when the
+        // budget runs out mid-sweep the slides that never got reached are the
+        // ones at the far end. Going back first means what is lost is the tail
+        // -- and the tail is where you started reading, so those slides are
+        // the ones the page still had in the DOM anyway.
         var needsBackwardPass = startingSlideIndex() >= 3;
+        var PASSES = needsBackwardPass
+            ? [{ label: "前へ", find: findPrevControl, backward: true },
+               { label: "次へ", find: findNextControl, backward: false }]
+            : [{ label: "次へ", find: findNextControl, backward: false }];
+        var passIndex = 0;
+
+        function beginPass() {
+            steps = 0;
+            backwardBlock = PASSES[passIndex].backward ? 1 : 0;
+            backwardWithinBlock = 0;
+        }
 
         function endPass(reason) {
             passIndex++;
-            if (passIndex < PASSES.length && needsBackwardPass) {
+            if (passIndex < PASSES.length) {
                 note(reason + " / " + PASSES[passIndex].label + "へ");
-                steps = 0;
-                backwardBlock = 1;
-                backwardWithinBlock = 0;
+                beginPass();
                 step();
             } else {
                 handOff(reason);
@@ -612,6 +643,7 @@ Action.prototype = {
             }
 
             var before = images.length;
+            var beforeSlide = slideSignature();
             try {
                 control.click();
             } catch (e) {
@@ -626,16 +658,24 @@ Action.prototype = {
                 backwardWithinBlock = 0;
             }
 
-            setTimeout(function() {
+            var waited = 0;
+            function settle() {
                 if (handedOff) { return; }
+                waited += STEP_POLL;
                 if (pageIdentity() !== startIdentity) {
                     handOff("[ERR] クリックでページが遷移したため中断");
                     return;
                 }
+                if (slideSignature() === beforeSlide && waited < STEP_MAX_WAIT) {
+                    setTimeout(settle, STEP_POLL);
+                    return;
+                }
                 collectRendered(false);
-                note(pass.label + steps + "回目: +" + (images.length - before) + "件");
+                note(pass.label + steps + "回目: +" + (images.length - before)
+                     + "件 " + waited + "ms");
                 step();
-            }, STEP_WAIT);
+            }
+            setTimeout(settle, STEP_POLL);
         }
 
         // Anything escaping here would leave the host with no result at all,
@@ -654,6 +694,7 @@ Action.prototype = {
                 handOff("カルーセル送りの対象サイトではないため実行しない");
             } else {
                 setTimeout(function() { handOff("時間切れ"); }, BACKSTOP);
+                beginPass();
                 step();
             }
         } catch (e) {
