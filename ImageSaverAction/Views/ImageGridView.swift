@@ -66,6 +66,14 @@ struct ImageGridView: View {
     /// Off by default: a thumbnail linking to another post is that post's
     /// picture, and "save the images on this page" does not mean them.
     @State private var includeOtherPosts = false
+    /// Off by default: a strip several times wider than it is tall is a
+    /// banner, a rule or a header -- page furniture rather than a picture of
+    /// anything. Measured on the sakurazaka46 photo list at 2042×280 and
+    /// 1200×126, against 1920×1280 for the photographs themselves.
+    @State private var includeBanners = false
+    /// Off by default: an image that would not load cannot be saved either, so
+    /// its tile is a warning triangle occupying a slot and nothing more.
+    @State private var includeFailed = false
     @State private var fullscreenIndex: Int = 0
     @State private var showLogSheet = false
 
@@ -81,6 +89,8 @@ struct ImageGridView: View {
             guard includeVideoPosters || !image.isVideoPoster else { return false }
             guard includeMetaImages || !image.isPageMetaImage else { return false }
             guard includeOtherPosts || !image.isOtherPostImage else { return false }
+            guard includeBanners || !isBanner(image) else { return false }
+            guard includeFailed || !loader.failed.contains(image.id) else { return false }
             guard sizeFilter != .all else { return true }
             let known = longestSide(of: image)
             return known == 0 || known >= sizeFilter.minimumPixels
@@ -183,8 +193,10 @@ struct ImageGridView: View {
 
                 if visibleImages.isEmpty {
                     Spacer()
-                    Text("画像が見つかりませんでした")
+                    Text(emptyMessage)
                         .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
                     Spacer()
                 } else if displayMode == .grid {
                     gridContent
@@ -280,6 +292,36 @@ struct ImageGridView: View {
                             }
                         } else {
                             Text("ページ情報の画像: なし")
+                        }
+
+                        if bannerCount > 0 {
+                            Button {
+                                includeBanners.toggle()
+                            } label: {
+                                if includeBanners {
+                                    Label("横長のバナー画像も表示 (\(bannerCount)件)",
+                                          systemImage: "checkmark")
+                                } else {
+                                    Text("横長のバナー画像も表示 (\(bannerCount)件)")
+                                }
+                            }
+                        } else {
+                            Text("横長のバナー画像: なし")
+                        }
+
+                        if failedCount > 0 {
+                            Button {
+                                includeFailed.toggle()
+                            } label: {
+                                if includeFailed {
+                                    Label("読み込みに失敗した画像も表示 (\(failedCount)件)",
+                                          systemImage: "checkmark")
+                                } else {
+                                    Text("読み込みに失敗した画像も表示 (\(failedCount)件)")
+                                }
+                            }
+                        } else {
+                            Text("読み込みに失敗した画像: なし")
                         }
                     } label: {
                         // Filled while anything is being held back, so hidden
@@ -398,6 +440,8 @@ struct ImageGridView: View {
             || (!includeVideoPosters && videoPosterCount > 0)
             || (!includeMetaImages && metaImageCount > 0)
             || (!includeOtherPosts && otherPostCount > 0)
+            || (!includeBanners && bannerCount > 0)
+            || (!includeFailed && failedCount > 0)
     }
 
     /// How many images the deeper scan found that the page does not render
@@ -416,6 +460,45 @@ struct ImageGridView: View {
 
     private var otherPostCount: Int {
         images.filter { $0.isOtherPostImage && !photoSaver.savedImageIDs.contains($0.id) }.count
+    }
+
+    /// Four times longer than it is deep. Read from the thumbnail where there
+    /// is one, which is safe: resizing changes an image's size but not its
+    /// shape, so the small copy answers this as well as the original would.
+    private func isBanner(_ image: PageImage) -> Bool {
+        var width = Double(image.width)
+        var height = Double(image.height)
+        if let measured = loader.pixelSizes[image.id] {
+            width = Double(measured.width)
+            height = Double(measured.height)
+        }
+        guard width > 0, height > 0 else { return false }
+        return max(width / height, height / width) >= 4
+    }
+
+    /// "Nothing found" is the wrong thing to say when the scan found plenty
+    /// and the filters are holding all of it back: the way out is the filter
+    /// menu, so the message has to point at it.
+    private var emptyMessage: String {
+        if images.isEmpty {
+            return "画像が見つかりませんでした"
+        }
+        if images.allSatisfy({ photoSaver.savedImageIDs.contains($0.id) }) {
+            return "すべて保存しました"
+        }
+        if hasHiddenImages {
+            return "絞り込みで\(images.count)件すべてが隠れています
+右上のアイコンから見直してください"
+        }
+        return "画像が見つかりませんでした"
+    }
+
+    private var bannerCount: Int {
+        images.filter { isBanner($0) && !photoSaver.savedImageIDs.contains($0.id) }.count
+    }
+
+    private var failedCount: Int {
+        images.filter { loader.failed.contains($0.id) && !photoSaver.savedImageIDs.contains($0.id) }.count
     }
 
     private var statusText: String {
