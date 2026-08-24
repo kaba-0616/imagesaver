@@ -487,8 +487,7 @@ struct ImageGridView: View {
             return "すべて保存しました"
         }
         if hasHiddenImages {
-            return "絞り込みで\(images.count)件すべてが隠れています
-右上のアイコンから見直してください"
+            return "絞り込みで\(images.count)件すべてが隠れています\n右上のアイコンから見直してください"
         }
         return "画像が見つかりませんでした"
     }

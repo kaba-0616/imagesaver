@@ -47,11 +47,23 @@ jobs:
       - name: Show compile errors (on failure)
         if: failure()
         run: |
-          echo "===== Lines containing 'error:' ====="
-          grep -n "error:" build/xcodebuild.log || echo "(no 'error:' lines found in log)"
-          echo ""
-          echo "===== Last 150 lines of full log ====="
-          tail -n 150 build/xcodebuild.log
+          # Also written to the step summary, which is the only part of a
+          # failed run readable without a token (via the check-runs API).
+          # Without it a build failure is just "exit code 65".
+          {
+            if [ ! -f build/xcodebuild.log ]; then
+              echo "### ログなし (アーカイブ開始前に失敗)"
+              exit 0
+            fi
+            echo "### コンパイルエラー"
+            echo '```'
+            grep -n "error:" build/xcodebuild.log | head -n 40 || echo "(error: の行なし)"
+            echo '```'
+            echo "### ログ末尾"
+            echo '```'
+            tail -n 60 build/xcodebuild.log
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Package IPA (unsigned, for Sideloadly)
         run: |
