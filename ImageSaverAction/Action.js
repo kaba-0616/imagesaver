@@ -99,7 +99,6 @@ Action.prototype = {
         // 1200x675 and only the file differs, 94KB against 555KB.
         var RESIZED_PATH = /^(.*\/[0-9a-f]{16,})\/\d+_\d+_\d+(\.(?:jpe?g|png|gif))$/i;
         var REQUESTED_BOX = /\/(\d+)_\d+_\d+\.[a-z]+$/i;
-        var upgraded = 0;
 
         /// The stored original behind a resize URL, or null if this is not one.
         function originalOf(parsed) {
@@ -146,27 +145,29 @@ Action.prototype = {
                 // photo behind a "600px以上" filter.
                 width = 0;
                 height = 0;
-                upgraded++;
             }
 
             // Several sizes of one photo collapse onto one original, so the
             // grid stops offering the same picture three times.
             var kept = seen[url];
             if (kept) {
-                if (rendered && kept.rendered
-                    && requestedWidth(rendered) > requestedWidth(kept.rendered)) {
+                // Prefer the largest thumbnail the page offers: it is what the
+                // grid loads, and what stands in if the original is missing.
+                if (rendered && requestedWidth(rendered) > requestedWidth(kept.rendered)) {
                     kept.rendered = rendered;
                 }
                 return;
             }
             var entry = {
                 url: url,
-                rendered: rendered,
                 width: width || 0,
                 height: height || 0,
                 origin: origin || "dom",
                 order: nextOrder()
             };
+            // Set only when there is one: null cannot cross into a property
+            // list, and the key's mere presence would carry it.
+            if (rendered) { entry.rendered = rendered; }
             seen[url] = entry;
             images.push(entry);
         }
@@ -215,8 +216,10 @@ Action.prototype = {
         // Anything drawn in a box smaller than this is an icon, whatever the
         // size of the file behind it.
         var SPRITE_MIN_BOX = 60;
-        var spritesSkipped = 0;
-        var spriteSamples = [];
+        // Keyed by URL, because collectRendered runs the background sweep
+        // twice -- once on arrival and once at hand-off -- and a running total
+        // would report every icon on the page as two.
+        var spritesSkipped = {};
 
         // Which sweep produced each image. Two rounds of guessing went into
         // finding out where unwanted pictures were entering from, so the
@@ -366,18 +369,14 @@ Action.prototype = {
                     // threshold can separate from a photograph.
                     var rect = el.getBoundingClientRect();
                     if (rect.width < SPRITE_MIN_BOX && rect.height < SPRITE_MIN_BOX) {
-                        spritesSkipped++;
                         // Named in the log so a page whose photographs really
                         // do sit in small boxes can be told from one whose
                         // small boxes really are icons, without guessing.
-                        if (spriteSamples.length < 4) {
-                            var sm = /url\(["']?([^"')]+)["']?\)/.exec(bg);
-                            if (sm) {
-                                spriteSamples.push(
-                                    sm[1].split("?")[0].split("/").pop().slice(-24)
-                                    + " " + Math.round(rect.width)
-                                    + "×" + Math.round(rect.height));
-                            }
+                        var sm = /url\(["']?([^"')]+)["']?\)/.exec(bg);
+                        var skipKey = sm ? sm[1] : bg;
+                        if (!spritesSkipped[skipKey]) {
+                            spritesSkipped[skipKey] = Math.round(rect.width)
+                                                      + "×" + Math.round(rect.height);
                         }
                         continue;
                     }
@@ -657,10 +656,26 @@ Action.prototype = {
             if (videoThumbs > 0) {
                 note("動画サムネイル: " + videoThumbs + "件");
             }
-            if (spritesSkipped > 0) {
-                note("アイコン枠の背景画像を除外: " + spritesSkipped + "件"
-                     + (spriteSamples.length
-                        ? " (" + spriteSamples.join(" / ") + ")" : ""));
+            var spriteNames = [];
+            var spriteCount = 0;
+            for (var sk in spritesSkipped) {
+                if (!Object.prototype.hasOwnProperty.call(spritesSkipped, sk)) { continue; }
+                spriteCount++;
+                if (spriteNames.length < 4) {
+                    spriteNames.push(sk.split("?")[0].split("/").pop().slice(-24)
+                                     + " " + spritesSkipped[sk]);
+                }
+            }
+            if (spriteCount > 0) {
+                note("アイコン枠の背景画像を除外: " + spriteCount + "種"
+                     + (spriteNames.length ? " (" + spriteNames.join(" / ") + ")" : ""));
+            }
+
+            // Counted from what survives rather than from calls to addURL: the
+            // same URL arrives several times over, once per sweep.
+            var upgraded = 0;
+            for (var ug = 0; ug < images.length; ug++) {
+                if (images[ug].rendered) { upgraded++; }
             }
             if (upgraded > 0) {
                 note("縮小指定を外して原寸URLに: " + upgraded + "件");
@@ -691,6 +706,24 @@ Action.prototype = {
             note("合計 " + images.length + "件 / 所要 " + (Date.now() - startedAt) + "ms");
 
             images.sort(function(a, b) { return a.order - b.order; });
+
+            // Anything that is not a string or a finite number cannot cross
+            // into a property list, and the host answers by failing to read
+            // the payload at all -- every image lost, with nothing in the log
+            // naming the key responsible. Build 63 sent `rendered: null` and
+            // returned 0 images on every page. Dropping the odd key costs at
+            // most one field; letting it through costs the whole run.
+            for (var si = 0; si < images.length; si++) {
+                var entry = images[si];
+                for (var key in entry) {
+                    if (!Object.prototype.hasOwnProperty.call(entry, key)) { continue; }
+                    var v = entry[key];
+                    if (typeof v === "string") { continue; }
+                    if (typeof v === "number" && isFinite(v)) { continue; }
+                    delete entry[key];
+                    note("[ERR] " + key + " を送信対象から除外 (" + (typeof v) + ")");
+                }
+            }
 
             params.completionFunction({
                 "images": images,
