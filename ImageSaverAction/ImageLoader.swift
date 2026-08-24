@@ -14,6 +14,28 @@ final class ImageLoader: ObservableObject {
     /// True pixel dimensions read from the downloaded file, which are usually
     /// more accurate than the layout sizes the page's DOM reported.
     @Published private(set) var pixelSizes: [Int: CGSize] = [:]
+    /// Which URL each measurement came from. An upgraded image is previewed
+    /// through the page's small copy, so a measurement taken there describes a
+    /// different file from the one that will be saved.
+    @Published private(set) var measuredFrom: [Int: URL] = [:]
+
+    /// The pixel size of the file this image will actually save, once
+    /// something has measured it. Nil while the only measurement on hand came
+    /// from previewing a smaller copy.
+    func trueSize(of image: PageImage) -> CGSize? {
+        guard let size = pixelSizes[image.id] else { return nil }
+        guard image.renderedURL == nil || measuredFrom[image.id] == image.url else { return nil }
+        return size
+    }
+
+    private func record(_ pixelSize: CGSize?, for image: PageImage, from url: URL) {
+        guard let pixelSize else { return }
+        // A measurement of the original outranks one of the preview copy, and
+        // the two downloads can finish in either order.
+        if measuredFrom[image.id] == image.url, url != image.url { return }
+        measuredFrom[image.id] = url
+        pixelSizes[image.id] = pixelSize
+    }
 
     private var tasks: [Int: Task<Void, Never>] = [:]
     private var fullImageTasks: [Int: Task<Void, Never>] = [:]
@@ -41,15 +63,13 @@ final class ImageLoader: ObservableObject {
                 // upgraded URL points at a multi-megabyte original, and a
                 // screenful of those is the slow, memory-hungry load this app
                 // exists to avoid.
-                let (thumbnail, pixelSize) = try await self.download(
+                let (thumbnail, pixelSize, from) = try await self.download(
                     image,
                     preferring: image.renderedURL ?? image.url,
                     maxPixelSize: maxPixelSize)
                 if Task.isCancelled { return }
                 self.thumbnails[image.id] = thumbnail
-                if let pixelSize {
-                    self.pixelSizes[image.id] = pixelSize
-                }
+                self.record(pixelSize, for: image, from: from)
             } catch {
                 if !Task.isCancelled {
                     self.failed.insert(image.id)
@@ -69,14 +89,12 @@ final class ImageLoader: ObservableObject {
             defer { Task { await self.fullImageSemaphore.signal() } }
 
             if !Task.isCancelled,
-               let (decoded, pixelSize) = try? await self.download(
+               let (decoded, pixelSize, from) = try? await self.download(
                    pageImage,
                    preferring: pageImage.url,
                    maxPixelSize: maxPixelSize) {
                 self.fullImages[id] = decoded
-                if let pixelSize {
-                    self.pixelSizes[id] = pixelSize
-                }
+                self.record(pixelSize, for: pageImage, from: from)
             }
             self.fullImageTasks[id] = nil
         }
@@ -101,13 +119,15 @@ final class ImageLoader: ObservableObject {
         _ image: PageImage,
         preferring first: URL,
         maxPixelSize: CGFloat
-    ) async throws -> (image: UIImage, pixelSize: CGSize?) {
+    ) async throws -> (image: UIImage, pixelSize: CGSize?, from: URL) {
         do {
-            return try await downloadThumbnail(url: first, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+            let got = try await downloadThumbnail(url: first, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+            return (got.image, got.pixelSize, first)
         } catch {
             let other = (first == image.url) ? image.renderedURL : image.url
             guard let other, other != first else { throw error }
-            return try await downloadThumbnail(url: other, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+            let got = try await downloadThumbnail(url: other, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+            return (got.image, got.pixelSize, other)
         }
     }
 

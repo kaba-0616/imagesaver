@@ -74,8 +74,12 @@ struct FullscreenPreviewView: View {
     }
 
     private var infoText: String {
-        if let size = loader.pixelSizes[image.id] {
+        if let size = loader.trueSize(of: image) {
             return "\(image.formatLabel)  \(Int(size.width))×\(Int(size.height))"
+        }
+        // Showing the thumbnail's size here would name a file nobody saves.
+        if image.renderedURL != nil {
+            return "\(image.formatLabel)  原寸"
         }
         if image.width > 0, image.height > 0 {
             return "\(image.formatLabel)  \(image.width)×\(image.height)"
