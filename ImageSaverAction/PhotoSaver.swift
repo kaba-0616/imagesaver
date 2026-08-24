@@ -153,11 +153,7 @@ final class PhotoSaver: ObservableObject {
 
     private func saveOne(_ image: PageImage) async -> Result<Void, Error> {
         do {
-            let (data, response) = try await session.data(from: image.url)
-
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw SaveError.httpError(http.statusCode)
-            }
+            let data = try await fetch(image)
 
             if image.isSVG {
                 // Photos can't store SVG, so rasterize to a PNG first.
@@ -168,9 +164,6 @@ final class PhotoSaver: ObservableObject {
                 try await addToLibrary(data: pngData, fileExtension: "png")
             } else {
                 // Save the original bytes so quality and metadata survive intact.
-                guard UIImage(data: data) != nil else {
-                    throw SaveError.decodeFailed
-                }
                 let ext = image.url.pathExtension.isEmpty ? "jpg" : image.url.pathExtension
                 try await addToLibrary(data: data, fileExtension: ext)
             }
@@ -178,6 +171,29 @@ final class PhotoSaver: ObservableObject {
         } catch {
             return .failure(error)
         }
+    }
+
+    /// `url` may be a rewrite asking a resize endpoint for its stored
+    /// original. Where that guess is wrong the page's own URL is still good,
+    /// so it is tried rather than reporting a failure.
+    private func fetch(_ image: PageImage) async throws -> Data {
+        do {
+            return try await fetch(image.url, isSVG: image.isSVG)
+        } catch {
+            guard let rendered = image.renderedURL else { throw error }
+            return try await fetch(rendered, isSVG: image.isSVG)
+        }
+    }
+
+    private func fetch(_ url: URL, isSVG: Bool) async throws -> Data {
+        let (data, response) = try await session.data(from: url)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw SaveError.httpError(http.statusCode)
+        }
+        // A CDN with no file at the path can answer 200 with an error page, so
+        // the bytes have to decode before the fallback is given up on.
+        if !isSVG, UIImage(data: data) == nil { throw SaveError.decodeFailed }
+        return data
     }
 
     private func addToLibrary(data: Data, fileExtension: String) async throws {

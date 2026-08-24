@@ -145,11 +145,13 @@ final class ActionViewController: UIViewController {
                 let width = (raw["width"] as? NSNumber)?.intValue ?? 0
                 let height = (raw["height"] as? NSNumber)?.intValue ?? 0
                 let origin = raw["origin"] as? String ?? "dom"
+                let rendered = (raw["rendered"] as? String).flatMap(URL.init(string:))
                 images.append(PageImage(
                     id: index,
                     url: url,
                     width: width,
                     height: height,
+                    renderedURL: rendered,
                     isFromSourceOnly: origin == "source",
                     isVideoPoster: origin == "video",
                     isPageMetaImage: origin == "meta",

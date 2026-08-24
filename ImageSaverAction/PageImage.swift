@@ -5,6 +5,12 @@ struct PageImage: Identifiable, Hashable {
     let url: URL
     let width: Int
     let height: Int
+    /// The URL the page itself displayed, kept only when `url` was rewritten
+    /// to ask a resize endpoint for its stored original. Two jobs: the grid
+    /// pulls thumbnails from here so a screen of 2MB originals never has to
+    /// be downloaded to preview them, and a rewrite that guesses wrong falls
+    /// back to it rather than losing the image.
+    let renderedURL: URL?
     /// Found only in the page's markup text, not rendered by it. Often the
     /// full-resolution original, but on feed-style sites also a lot of images
     /// belonging to other posts.

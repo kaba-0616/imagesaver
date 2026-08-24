@@ -37,7 +37,14 @@ final class ImageLoader: ObservableObject {
             if Task.isCancelled { return }
 
             do {
-                let (thumbnail, pixelSize) = try await self.downloadThumbnail(url: image.url, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+                // Previewing costs whatever the page itself paid: an
+                // upgraded URL points at a multi-megabyte original, and a
+                // screenful of those is the slow, memory-hungry load this app
+                // exists to avoid.
+                let (thumbnail, pixelSize) = try await self.download(
+                    image,
+                    preferring: image.renderedURL ?? image.url,
+                    maxPixelSize: maxPixelSize)
                 if Task.isCancelled { return }
                 self.thumbnails[image.id] = thumbnail
                 if let pixelSize {
@@ -62,7 +69,10 @@ final class ImageLoader: ObservableObject {
             defer { Task { await self.fullImageSemaphore.signal() } }
 
             if !Task.isCancelled,
-               let (decoded, pixelSize) = try? await self.downloadThumbnail(url: pageImage.url, maxPixelSize: maxPixelSize, isSVG: pageImage.isSVG) {
+               let (decoded, pixelSize) = try? await self.download(
+                   pageImage,
+                   preferring: pageImage.url,
+                   maxPixelSize: maxPixelSize) {
                 self.fullImages[id] = decoded
                 if let pixelSize {
                     self.pixelSizes[id] = pixelSize
@@ -82,6 +92,23 @@ final class ImageLoader: ObservableObject {
         tasks.removeAll()
         fullImageTasks.values.forEach { $0.cancel() }
         fullImageTasks.removeAll()
+    }
+
+    /// Tries one URL and, if the image has an alternate, the other. The two
+    /// differ only in which copy of the same picture they name, so either
+    /// answers the request.
+    private func download(
+        _ image: PageImage,
+        preferring first: URL,
+        maxPixelSize: CGFloat
+    ) async throws -> (image: UIImage, pixelSize: CGSize?) {
+        do {
+            return try await downloadThumbnail(url: first, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+        } catch {
+            let other = (first == image.url) ? image.renderedURL : image.url
+            guard let other, other != first else { throw error }
+            return try await downloadThumbnail(url: other, maxPixelSize: maxPixelSize, isSVG: image.isSVG)
+        }
     }
 
     private func downloadThumbnail(

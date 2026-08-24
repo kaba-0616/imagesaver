@@ -93,6 +93,11 @@ struct ImageGridView: View {
     /// the filter is meant to remove. This is also the size on the badge, so
     /// the filter matches what is on screen.
     private func longestSide(of image: PageImage) -> Int {
+        // An upgraded URL is previewed through the page's small copy but saved
+        // at full size, so the measured pixels describe the wrong file.
+        // Unknown is the honest answer, and it stops the filter hiding an
+        // original that is larger than anything it managed to measure.
+        if image.renderedURL != nil { return max(image.width, image.height) }
         if let pixels = loader.pixelSizes[image.id] {
             return Int(max(pixels.width, pixels.height))
         }
@@ -521,6 +526,11 @@ private struct ThumbnailCell: View {
     }
 
     private var badgeText: String {
+        // The thumbnail on screen is the page's own small copy, so its pixel
+        // count would misdescribe the original this will save.
+        if image.renderedURL != nil {
+            return "\(image.formatLabel) 原寸"
+        }
         // Prefer the real pixel size read from the file; fall back to the DOM's layout size.
         if let size = loader.pixelSizes[image.id] {
             return "\(image.formatLabel) \(Int(size.width))×\(Int(size.height))"

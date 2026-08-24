@@ -89,28 +89,86 @@ Action.prototype = {
             return pageKey(target.pathname) !== thisPageKey;
         }
 
+        // Some CMSs serve every picture through a resize endpoint with the
+        // wanted box written into the path: .../<hash>/1200_1200_102400.jpg.
+        // The third number is a byte budget, so even asking at the original's
+        // own pixel size comes back recompressed to a fraction of the file.
+        // Dropping the segment asks for the stored original instead. Measured
+        // on sakurazaka46.com: 1200_1200_102400 is 1200x800 at 98KB, the bare
+        // path 2880x1920 at 1.1MB; on hinatazaka46.com the pixels match at
+        // 1200x675 and only the file differs, 94KB against 555KB.
+        var RESIZED_PATH = /^(.*\/[0-9a-f]{16,})\/\d+_\d+_\d+(\.(?:jpe?g|png|gif))$/i;
+        var REQUESTED_BOX = /\/(\d+)_\d+_\d+\.[a-z]+$/i;
+        var upgraded = 0;
+
+        /// The stored original behind a resize URL, or null if this is not one.
+        function originalOf(parsed) {
+            if (!RESIZED_PATH.test(parsed.pathname)) { return null; }
+            var full = new URL(parsed.href);
+            full.pathname = parsed.pathname.replace(RESIZED_PATH, "$1$2");
+            return full.href;
+        }
+
+        /// The width a resize URL asked for. Only used to keep the largest of
+        /// several thumbnails of one photo.
+        function requestedWidth(href) {
+            var m;
+            try { m = REQUESTED_BOX.exec(new URL(href).pathname); } catch (e) { return 0; }
+            return m ? parseInt(m[1], 10) : 0;
+        }
+
         function addURL(url, width, height, origin) {
             if (!url) { return; }
             url = String(url).trim();
             if (!url || url.indexOf("data:") === 0) { return; }
+            var parsed;
             try {
-                url = new URL(url, document.baseURI).href;
+                parsed = new URL(url, document.baseURI);
             } catch (e) {
                 return;
             }
+            url = parsed.href;
             if (UI_ASSET_PATH.test(url)) {
                 uiAssetsSkipped++;
                 return;
             }
-            if (seen[url]) { return; }
-            seen[url] = true;
-            images.push({
+
+            // Keeping the page's own URL costs nothing and buys two things:
+            // the grid still loads cheap thumbnails, and an original that
+            // turns out not to be there falls back to what the page showed.
+            var rendered = null;
+            var original = originalOf(parsed);
+            if (original) {
+                rendered = url;
+                url = original;
+                // The DOM's numbers describe the thumbnail that was asked for,
+                // not the original now being fetched, and would hide a 2880px
+                // photo behind a "600px以上" filter.
+                width = 0;
+                height = 0;
+                upgraded++;
+            }
+
+            // Several sizes of one photo collapse onto one original, so the
+            // grid stops offering the same picture three times.
+            var kept = seen[url];
+            if (kept) {
+                if (rendered && kept.rendered
+                    && requestedWidth(rendered) > requestedWidth(kept.rendered)) {
+                    kept.rendered = rendered;
+                }
+                return;
+            }
+            var entry = {
                 url: url,
+                rendered: rendered,
                 width: width || 0,
                 height: height || 0,
                 origin: origin || "dom",
                 order: nextOrder()
-            });
+            };
+            seen[url] = entry;
+            images.push(entry);
         }
 
         // Picks the highest-resolution candidate. Srcset order is not defined by
@@ -158,6 +216,7 @@ Action.prototype = {
         // size of the file behind it.
         var SPRITE_MIN_BOX = 60;
         var spritesSkipped = 0;
+        var spriteSamples = [];
 
         // Which sweep produced each image. Two rounds of guessing went into
         // finding out where unwanted pictures were entering from, so the
@@ -308,6 +367,18 @@ Action.prototype = {
                     var rect = el.getBoundingClientRect();
                     if (rect.width < SPRITE_MIN_BOX && rect.height < SPRITE_MIN_BOX) {
                         spritesSkipped++;
+                        // Named in the log so a page whose photographs really
+                        // do sit in small boxes can be told from one whose
+                        // small boxes really are icons, without guessing.
+                        if (spriteSamples.length < 4) {
+                            var sm = /url\(["']?([^"')]+)["']?\)/.exec(bg);
+                            if (sm) {
+                                spriteSamples.push(
+                                    sm[1].split("?")[0].split("/").pop().slice(-24)
+                                    + " " + Math.round(rect.width)
+                                    + "×" + Math.round(rect.height));
+                            }
+                        }
                         continue;
                     }
                     var re = /url\(["']?([^"')]+)["']?\)/g;
@@ -587,7 +658,12 @@ Action.prototype = {
                 note("動画サムネイル: " + videoThumbs + "件");
             }
             if (spritesSkipped > 0) {
-                note("アイコン枠の背景画像を除外: " + spritesSkipped + "件");
+                note("アイコン枠の背景画像を除外: " + spritesSkipped + "件"
+                     + (spriteSamples.length
+                        ? " (" + spriteSamples.join(" / ") + ")" : ""));
+            }
+            if (upgraded > 0) {
+                note("縮小指定を外して原寸URLに: " + upgraded + "件");
             }
             if (uiAssetsSkipped > 0) {
                 note("UI部品の画像を除外: " + uiAssetsSkipped + "件");
