@@ -460,7 +460,11 @@ private struct ThumbnailCell: View {
             .clipped()
             .contentShape(Rectangle())
             .onTapGesture { onTapImage() }
-            .onAppear { loader.requestThumbnail(for: image) }
+            .onAppear {
+                loader.markOnScreen(image.id, true)
+                loader.requestThumbnail(for: image)
+            }
+            .onDisappear { loader.markOnScreen(image.id, false) }
     }
 
     private var thumbnail: some View {
@@ -555,6 +559,11 @@ struct LogSheet: View {
                         .foregroundColor(.secondary)
                         .textSelection(.enabled)
 
+                    Text(memoryLine)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+
                     if !extractionLog.isEmpty {
                         section(title: "読み込み") {
                             ForEach(Array(extractionLog.enumerated()), id: \.offset) { _, text in
@@ -612,8 +621,14 @@ struct LogSheet: View {
         .navigationViewStyle(.stack)
     }
 
+    /// Read when the sheet is drawn, so it reports the moment the log was
+    /// opened rather than whatever it was at launch.
+    private var memoryLine: String {
+        "メモリ \(Footprint.megabytes)MB / 前回の終わり方: \(RunOutcome.previous)"
+    }
+
     private var allLogText: String {
-        var lines: [String] = [RunID.label]
+        var lines: [String] = [RunID.label, memoryLine]
         if !extractionLog.isEmpty {
             lines.append("=== 読み込み ===")
             lines.append(contentsOf: extractionLog)

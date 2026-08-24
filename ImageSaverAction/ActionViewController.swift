@@ -9,6 +9,7 @@ final class ActionViewController: UIViewController {
         super.viewDidLoad()
 
         RunID.beginRun()
+        RunOutcome.begin()
 
         let loading = UIHostingController(rootView: LoadingView())
         addChild(loading)
@@ -25,6 +26,7 @@ final class ActionViewController: UIViewController {
             loading.removeFromParent()
 
             let close: () -> Void = { [weak self] in
+                RunOutcome.note("正常終了")
                 self?.extensionContext?.completeRequest(returningItems: nil)
             }
 

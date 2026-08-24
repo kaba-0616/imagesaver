@@ -37,6 +37,23 @@ final class ImageLoader: ObservableObject {
         pixelSizes[image.id] = pixelSize
     }
 
+    /// Tiles currently on screen. Their thumbnails are never evicted: a cell
+    /// has already had its onAppear, so dropping its image would leave a blank
+    /// tile with nothing left to trigger a reload.
+    private var onScreen: Set<Int> = []
+    /// Least recently used first.
+    private var thumbnailOrder: [Int] = []
+    private var fullImageOrder: [Int] = []
+
+    /// Sized against the extension's allowance, not the device's RAM. A page
+    /// of 300 images scrolled end to end would otherwise hold every decoded
+    /// tile at once, and the system's answer to that is to kill the process --
+    /// which from outside looks like the share sheet closing by itself.
+    private let thumbnailBudget = 32 * 1024 * 1024
+    /// Fullscreen shows one image; its neighbours are worth keeping for a
+    /// swipe back and no more. At 2048px each is around 11MB.
+    private let fullImageLimit = 3
+
     private var tasks: [Int: Task<Void, Never>] = [:]
     private var fullImageTasks: [Int: Task<Void, Never>] = [:]
     private let semaphore = AsyncSemaphore(limit: 6)
@@ -47,6 +64,76 @@ final class ImageLoader: ObservableObject {
         config.httpMaximumConnectionsPerHost = 6
         return URLSession(configuration: config)
     }()
+
+    private var memoryWarningObserver: NSObjectProtocol?
+
+    init() {
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.purge() }
+        }
+    }
+
+    deinit {
+        // The extension's process is reused across share-sheet invocations, so
+        // an observer left behind here accumulates one per run.
+        if let memoryWarningObserver {
+            NotificationCenter.default.removeObserver(memoryWarningObserver)
+        }
+    }
+
+    func markOnScreen(_ id: Int, _ visible: Bool) {
+        if visible { onScreen.insert(id) } else { onScreen.remove(id) }
+    }
+
+    /// The system has said it is short of memory. An extension that ignores
+    /// that is killed rather than asked a second time.
+    func purge() {
+        RunOutcome.note("メモリ警告を受けて解放")
+        while fullImageOrder.count > 1 {
+            fullImages[fullImageOrder.removeFirst()] = nil
+        }
+        trimThumbnails(to: 0)
+    }
+
+    private func storeThumbnail(_ image: UIImage, for id: Int) {
+        thumbnails[id] = image
+        thumbnailOrder.removeAll { $0 == id }
+        thumbnailOrder.append(id)
+        trimThumbnails(to: thumbnailBudget)
+    }
+
+    private func storeFullImage(_ image: UIImage, for id: Int) {
+        fullImages[id] = image
+        fullImageOrder.removeAll { $0 == id }
+        fullImageOrder.append(id)
+        while fullImageOrder.count > fullImageLimit {
+            fullImages[fullImageOrder.removeFirst()] = nil
+        }
+    }
+
+    private func trimThumbnails(to budget: Int) {
+        var total = thumbnailOrder.reduce(0) { $0 + bytes(of: thumbnails[$1]) }
+        var index = 0
+        while total > budget, index < thumbnailOrder.count {
+            let id = thumbnailOrder[index]
+            if onScreen.contains(id) {
+                index += 1
+                continue
+            }
+            total -= bytes(of: thumbnails[id])
+            thumbnails[id] = nil
+            thumbnailOrder.remove(at: index)
+        }
+    }
+
+    private func bytes(of image: UIImage?) -> Int {
+        guard let cgImage = image?.cgImage else { return 0 }
+        return cgImage.bytesPerRow * cgImage.height
+    }
 
     func requestThumbnail(for image: PageImage, maxPixelSize: CGFloat = 300) {
         guard thumbnails[image.id] == nil, !failed.contains(image.id), tasks[image.id] == nil else { return }
@@ -68,7 +155,7 @@ final class ImageLoader: ObservableObject {
                     preferring: image.renderedURL ?? image.url,
                     maxPixelSize: maxPixelSize)
                 if Task.isCancelled { return }
-                self.thumbnails[image.id] = thumbnail
+                self.storeThumbnail(thumbnail, for: image.id)
                 self.record(pixelSize, for: image, from: from)
             } catch {
                 if !Task.isCancelled {
@@ -93,7 +180,7 @@ final class ImageLoader: ObservableObject {
                    pageImage,
                    preferring: pageImage.url,
                    maxPixelSize: maxPixelSize) {
-                self.fullImages[id] = decoded
+                self.storeFullImage(decoded, for: id)
                 self.record(pixelSize, for: pageImage, from: from)
             }
             self.fullImageTasks[id] = nil
