@@ -23,6 +23,17 @@ struct ContentView: View {
                     }
                 }
 
+                // Saving the same picture twice is what this app does when you
+                // share a page you have shared before, so the duplicates it
+                // creates are its own to clean up.
+                Section {
+                    NavigationLink(destination: DuplicateFinderView()) {
+                        Label("写真の重複を整理", systemImage: "square.on.square.dashed")
+                    }
+                } footer: {
+                    Text("同じ写真と似ている写真をまとめて表示します。削除するものは自分で選びます。")
+                }
+
                 // The extension cannot safely raise the Photos permission prompt
                 // itself, so it has to be granted here first.
                 Section {
