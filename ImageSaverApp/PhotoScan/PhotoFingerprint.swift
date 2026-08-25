@@ -17,6 +17,36 @@ struct PhotoFingerprint: Codable, Equatable {
     let burstIdentifier: String?
     let isFavorite: Bool
     let isScreenshot: Bool
+    /// Filled in later, for the few hundred photos that survive grouping, and
+    /// only ever shown or sorted by -- never used to decide what is a
+    /// duplicate. Optional with a default on purpose: a non-optional field
+    /// would fail to decode every cache file written before it existed, and
+    /// the user would be made to scan the whole library again.
+    var byteCount: Int64?
+
+    init(localIdentifier: String,
+         coarse: UInt64,
+         fine: FineHash,
+         width: Int,
+         height: Int,
+         creationDate: Date?,
+         modificationDate: Date?,
+         burstIdentifier: String?,
+         isFavorite: Bool,
+         isScreenshot: Bool,
+         byteCount: Int64? = nil) {
+        self.localIdentifier = localIdentifier
+        self.coarse = coarse
+        self.fine = fine
+        self.width = width
+        self.height = height
+        self.creationDate = creationDate
+        self.modificationDate = modificationDate
+        self.burstIdentifier = burstIdentifier
+        self.isFavorite = isFavorite
+        self.isScreenshot = isScreenshot
+        self.byteCount = byteCount
+    }
 
     /// Compared before two photos are called similar. A portrait and a
     /// landscape squashed onto the same 9×8 grid can score alike without
@@ -33,13 +63,7 @@ struct PhotoFingerprint: Codable, Equatable {
 /// not re-read every thumbnail in the library.
 enum FingerprintCache {
 
-    private static var fileURL: URL? {
-        try? FileManager.default.url(for: .applicationSupportDirectory,
-                                     in: .userDomainMask,
-                                     appropriateFor: nil,
-                                     create: true)
-            .appendingPathComponent("fingerprints.json")
-    }
+    private static var fileURL: URL? { PhotoScanStore.url("fingerprints.json") }
 
     static func load() -> [String: PhotoFingerprint] {
         guard let url = fileURL, let data = try? Data(contentsOf: url) else { return [:] }
@@ -50,6 +74,8 @@ enum FingerprintCache {
         return byID
     }
 
+    /// Losing this file costs a re-scan and nothing else, which is why the
+    /// failure is swallowed here and emphatically not in RejectedPairs.
     static func save(_ prints: [PhotoFingerprint]) {
         guard let url = fileURL, let data = try? JSONEncoder().encode(prints) else { return }
         try? data.write(to: url, options: .atomic)
