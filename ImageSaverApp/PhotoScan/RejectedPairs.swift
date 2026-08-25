@@ -10,6 +10,12 @@ import Foundation
 struct RejectionDecision: Codable, Equatable {
     let at: Date
     let members: [String]
+    /// Which tab the press happened on. "≠" now excludes a pair only from
+    /// the grouping it was pressed against -- a duplicate-tab rejection says
+    /// nothing about whether the same two photos are similar, and the other
+    /// way round -- so the tab it came from is part of the decision, not
+    /// metadata about it.
+    let kind: DuplicateGroup.Kind
 }
 
 /// The file behind RejectedPairs. Nothing here is actor isolated, so the
@@ -26,6 +32,29 @@ enum RejectionFile {
         struct Entry: Codable {
             let at: Date
             let members: [Int]
+            let kind: DuplicateGroup.Kind
+
+            init(at: Date, members: [Int], kind: DuplicateGroup.Kind) {
+                self.at = at
+                self.members = members
+                self.kind = kind
+            }
+
+            // A file written before kind-scoping existed has no `kind` key
+            // at all. Every decision on disk at that point was pressed on
+            // the similar tab in practice (duplicate-tab rejection wasn't
+            // something anyone had done yet), so that is the fallback --
+            // not a guess so much as what the missing field always meant.
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                at = try container.decode(Date.self, forKey: .at)
+                members = try container.decode([Int].self, forKey: .members)
+                kind = try container.decodeIfPresent(DuplicateGroup.Kind.self, forKey: .kind) ?? .similar
+            }
+
+            private enum CodingKeys: String, CodingKey {
+                case at, members, kind
+            }
         }
         let version: Int
         let ids: [String]
@@ -47,7 +76,7 @@ enum RejectionFile {
                 members.append(stored.ids[index])
             }
             guard members.count > 1 else { continue }
-            result.append(RejectionDecision(at: entry.at, members: members))
+            result.append(RejectionDecision(at: entry.at, members: members, kind: entry.kind))
         }
         return result
     }
@@ -84,7 +113,7 @@ enum RejectionFile {
                     members.append(index)
                 }
             }
-            entries.append(Stored.Entry(at: decision.at, members: members))
+            entries.append(Stored.Entry(at: decision.at, members: members, kind: decision.kind))
         }
 
         let stored = Stored(version: version, ids: ids, decisions: entries)
@@ -140,11 +169,19 @@ final class RejectedPairs {
     /// suspension point, and the second press runs in the gap.
     private var saving = false
 
-    /// What DuplicateGrouper is handed. Sets of identifiers, expanded into
-    /// index pairs inside the grouping itself -- the indices belong to it.
-    var memberSets: [Set<String>] { decisions.map { Set($0.members) } }
+    /// What DuplicateGrouper is handed for one tab's grouping. Sets of
+    /// identifiers, expanded into index pairs inside the grouping itself --
+    /// the indices belong to it. Scoped to `kind` because a rejection now
+    /// only ever excludes the pair from the tab it was pressed on.
+    func memberSets(for kind: DuplicateGroup.Kind) -> [Set<String>] {
+        decisions.filter { $0.kind == kind }.map { Set($0.members) }
+    }
 
     var count: Int { decisions.count }
+
+    func count(for kind: DuplicateGroup.Kind) -> Int {
+        decisions.filter { $0.kind == kind }.count
+    }
 
     var pairCount: Int { decisions.reduce(0) { $0 + Self.pairs(in: $1.members.count) } }
 
@@ -154,7 +191,7 @@ final class RejectedPairs {
         loaded = true
     }
 
-    func add(_ members: [String]) async -> Outcome {
+    func add(_ members: [String], kind: DuplicateGroup.Kind) async -> Outcome {
         guard !saving else { return .busy }
         let unique = Array(Set(members))
         guard unique.count > 1 else { return .nothingToStore }
@@ -165,7 +202,7 @@ final class RejectedPairs {
         guard projected <= Self.maxTotalPairs else { return .storeFull(projected) }
 
         var next = decisions
-        next.append(RejectionDecision(at: Date(), members: unique))
+        next.append(RejectionDecision(at: Date(), members: unique, kind: kind))
         return await write(next)
     }
 
@@ -177,10 +214,14 @@ final class RejectedPairs {
         return await write(next)
     }
 
-    func removeAll() async -> Outcome {
+    /// Clears only the decisions made on `kind`'s tab, leaving the other
+    /// tab's exclusions untouched -- the two are independent now, so
+    /// "clear" has to be too.
+    func removeAll(kind: DuplicateGroup.Kind) async -> Outcome {
         guard !saving else { return .busy }
-        guard !decisions.isEmpty else { return .saved }
-        return await write([])
+        let remaining = decisions.filter { $0.kind != kind }
+        guard remaining.count != decisions.count else { return .saved }
+        return await write(remaining)
     }
 
     /// The one place `decisions` is replaced, and the only thing the flag has

@@ -2,7 +2,7 @@ import Foundation
 
 struct DuplicateGroup: Identifiable {
 
-    enum Kind: Hashable, CaseIterable {
+    enum Kind: String, Hashable, CaseIterable, Codable {
         case identical
         case similar
 
@@ -157,69 +157,41 @@ enum DuplicateGrouper {
         let largestBucket: Int
     }
 
-    static func group(_ prints: [PhotoFingerprint],
-                      level: Int,
-                      rejected: [Set<String>],
-                      cropCache: CropCache? = nil,
-                      cropTimeShare: Double = 0.8,
-                      progress: (@Sendable (Double) -> Void)? = nil) -> Result {
+    /// Groups sharing an exact fine-hash+dimensions key or a burst id, and
+    /// nothing else -- no hamming threshold, no crop pass. This is what
+    /// `.identical` membership has always actually reduced to (see
+    /// `kind(of:)`), so it costs an O(n) pass over the library instead of the
+    /// O(n²) comparison `groupSimilar` needs -- independent of `level`
+    /// entirely, and fast enough to redo on its own without dragging the
+    /// similar tab's expensive pass along with it.
+    static func groupIdentical(_ prints: [PhotoFingerprint], rejected: [Set<String>]) -> [DuplicateGroup] {
+        guard prints.count > 1 else { return [] }
+        let indexByID = buildIndexByID(prints)
+        let (rejectedPairs, rejectedIndices) = expandRejections(rejected, indexByID: indexByID)
+        var sets = DisjointSet(prints.count)
+        linkExactAndBursts(prints, into: &sets, rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices)
+        return buildGroups(prints, in: &sets, onlyKind: .identical,
+                           hasRejections: !rejectedPairs.isEmpty,
+                           rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices,
+                           croppedIndices: [])
+    }
+
+    static func groupSimilar(_ prints: [PhotoFingerprint],
+                             level: Int,
+                             rejected: [Set<String>],
+                             cropCache: CropCache? = nil,
+                             cropTimeShare: Double = 0.8,
+                             progress: (@Sendable (Double) -> Void)? = nil) -> Result {
         guard prints.count > 1 else {
             return Result(groups: [], cropMS: 0, cropCandidatePairs: 0, largestWidthBucket: 0,
                          cropCache: nil, cropReused: false)
         }
         let count = prints.count
 
-        var indexByID: [String: Int] = [:]
-        indexByID.reserveCapacity(count)
-        for (index, print) in prints.enumerated() {
-            indexByID[print.localIdentifier] = index
-        }
-
-        // Identifier sets in, packed index pairs out. The inner loop below runs
-        // tens of millions of times and cannot afford to look anything up by
-        // string.
-        var rejectedPairs = Set<Int64>()
-        var rejectedIndices = Set<Int>()
-        for decision in rejected {
-            var members: [Int] = []
-            members.reserveCapacity(decision.count)
-            for identifier in decision {
-                if let index = indexByID[identifier] { members.append(index) }
-            }
-            guard members.count > 1 else { continue }
-            for a in 0..<(members.count - 1) {
-                for b in (a + 1)..<members.count {
-                    rejectedPairs.insert(pairKey(members[a], members[b]))
-                }
-            }
-            for index in members { rejectedIndices.insert(index) }
-        }
-
+        let indexByID = buildIndexByID(prints)
+        let (rejectedPairs, rejectedIndices) = expandRejections(rejected, indexByID: indexByID)
         var sets = DisjointSet(count)
-
-        // Same picture, byte-for-byte or near enough that 256 bits cannot tell
-        // them apart. Found by lookup rather than comparison, so it costs
-        // nothing even on a large library.
-        var byExact: [ExactKey: [Int]] = [:]
-        byExact.reserveCapacity(count)
-        for (index, print) in prints.enumerated() {
-            byExact[ExactKey(print), default: []].append(index)
-        }
-        for (_, members) in byExact {
-            link(members, in: &sets,
-                 rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices)
-        }
-
-        // A burst is a group the camera already decided on.
-        var byBurst: [String: [Int]] = [:]
-        for (index, print) in prints.enumerated() {
-            guard let burst = print.burstIdentifier else { continue }
-            byBurst[burst, default: []].append(index)
-        }
-        for (_, members) in byBurst {
-            link(members, in: &sets,
-                 rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices)
-        }
+        linkExactAndBursts(prints, into: &sets, rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices)
 
         // Flat arrays: the inner loop runs tens of millions of times and
         // reaching through a struct for each field is most of the cost.
@@ -291,20 +263,107 @@ enum DuplicateGrouper {
                                       progress: cropProgress)
             progress?(1)
         }
-        let croppedIndices = cropOutcome.cropped
+        let sorted = buildGroups(prints, in: &sets, onlyKind: .similar,
+                                 hasRejections: hasRejections,
+                                 rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices,
+                                 croppedIndices: cropOutcome.cropped)
+        return Result(groups: sorted,
+                     cropMS: cropOutcome.milliseconds,
+                     cropCandidatePairs: cropOutcome.candidatePairs,
+                     largestWidthBucket: cropOutcome.largestBucket,
+                     cropCache: DuplicateGrouper.CropCache(matchedPairs: cropOutcome.matchedPairs,
+                                                           cropped: cropOutcome.cropped,
+                                                           candidatePairs: cropOutcome.candidatePairs,
+                                                           largestBucket: cropOutcome.largestBucket),
+                     cropReused: cropCache != nil)
+    }
 
+    // MARK: - Shared setup
+
+    private static func buildIndexByID(_ prints: [PhotoFingerprint]) -> [String: Int] {
+        var result: [String: Int] = [:]
+        result.reserveCapacity(prints.count)
+        for (index, print) in prints.enumerated() {
+            result[print.localIdentifier] = index
+        }
+        return result
+    }
+
+    /// Identifier sets in, packed index pairs out. The inner loops both
+    /// `groupIdentical` and `groupSimilar` run afterward cannot afford to
+    /// look anything up by string, so the rejection decisions are converted
+    /// to index pairs once, here.
+    private static func expandRejections(_ rejected: [Set<String>],
+                                         indexByID: [String: Int]) -> (pairs: Set<Int64>, indices: Set<Int>) {
+        var rejectedPairs = Set<Int64>()
+        var rejectedIndices = Set<Int>()
+        for decision in rejected {
+            var members: [Int] = []
+            members.reserveCapacity(decision.count)
+            for identifier in decision {
+                if let index = indexByID[identifier] { members.append(index) }
+            }
+            guard members.count > 1 else { continue }
+            for a in 0..<(members.count - 1) {
+                for b in (a + 1)..<members.count {
+                    rejectedPairs.insert(pairKey(members[a], members[b]))
+                }
+            }
+            for index in members { rejectedIndices.insert(index) }
+        }
+        return (rejectedPairs, rejectedIndices)
+    }
+
+    private static func linkExactAndBursts(_ prints: [PhotoFingerprint],
+                                           into sets: inout DisjointSet,
+                                           rejectedPairs: Set<Int64>,
+                                           rejectedIndices: Set<Int>) {
+        // Same picture, byte-for-byte or near enough that 256 bits cannot tell
+        // them apart. Found by lookup rather than comparison, so it costs
+        // nothing even on a large library.
+        var byExact: [ExactKey: [Int]] = [:]
+        byExact.reserveCapacity(prints.count)
+        for (index, print) in prints.enumerated() {
+            byExact[ExactKey(print), default: []].append(index)
+        }
+        for (_, members) in byExact {
+            link(members, in: &sets,
+                 rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices)
+        }
+
+        // A burst is a group the camera already decided on.
+        var byBurst: [String: [Int]] = [:]
+        for (index, print) in prints.enumerated() {
+            guard let burst = print.burstIdentifier else { continue }
+            byBurst[burst, default: []].append(index)
+        }
+        for (_, members) in byBurst {
+            link(members, in: &sets,
+                 rejectedPairs: rejectedPairs, rejectedIndices: rejectedIndices)
+        }
+    }
+
+    /// Turns the disjoint set into groups, keeping only the ones whose kind
+    /// (by `kind(of:)`, decided by the members alone) matches `onlyKind` --
+    /// this is what lets `groupIdentical` and `groupSimilar` share one
+    /// union-find walk and one sort while each returning only its own tab's
+    /// half of it.
+    private static func buildGroups(_ prints: [PhotoFingerprint],
+                                    in sets: inout DisjointSet,
+                                    onlyKind: DuplicateGroup.Kind,
+                                    hasRejections: Bool,
+                                    rejectedPairs: Set<Int64>,
+                                    rejectedIndices: Set<Int>,
+                                    croppedIndices: Set<Int>) -> [DuplicateGroup] {
         var buckets: [Int: [Int]] = [:]
-        for index in 0..<count {
+        for index in 0..<prints.count {
             buckets[sets.find(index), default: []].append(index)
         }
 
         var groups: [DuplicateGroup] = []
         for (root, indices) in buckets where indices.count > 1 {
             let members = indices.map { prints[$0] }
-            // Which tab the group lands on, and nothing else: both tabs are
-            // ranked by the same rule, and whether every member is the same
-            // picture does not depend on their order.
-            let kind = self.kind(of: members)
+            guard kind(of: members) == onlyKind else { continue }
             let flagged = hasRejections
                 && containsRejectedPair(indices, in: rejectedPairs, touching: rejectedIndices)
             var cropped: Set<String> = []
@@ -312,7 +371,7 @@ enum DuplicateGrouper {
                 cropped.insert(prints[index].localIdentifier)
             }
             groups.append(DuplicateGroup(id: root,
-                                         kind: kind,
+                                         kind: onlyKind,
                                          members: order(members, croppedIdentifiers: cropped),
                                          hasRejectedPair: flagged,
                                          croppedIdentifiers: cropped))
@@ -323,7 +382,7 @@ enum DuplicateGrouper {
         // the old rule (biggest group, then id) since a missing date should
         // not make two otherwise-equal groups swap places for no visible
         // reason.
-        let sorted = groups.sorted { lhs, rhs in
+        return groups.sorted { lhs, rhs in
             let left = oldest(lhs), right = oldest(rhs)
             if left != right { return left < right }
             if lhs.members.count != rhs.members.count {
@@ -331,15 +390,6 @@ enum DuplicateGrouper {
             }
             return lhs.id < rhs.id
         }
-        return Result(groups: sorted,
-                     cropMS: cropOutcome.milliseconds,
-                     cropCandidatePairs: cropOutcome.candidatePairs,
-                     largestWidthBucket: cropOutcome.largestBucket,
-                     cropCache: DuplicateGrouper.CropCache(matchedPairs: cropOutcome.matchedPairs,
-                                                           cropped: cropOutcome.cropped,
-                                                           candidatePairs: cropOutcome.candidatePairs,
-                                                           largestBucket: cropOutcome.largestBucket),
-                     cropReused: cropCache != nil)
     }
 
     /// The oldest `creationDate` among a group's members, in the same
@@ -389,18 +439,24 @@ enum DuplicateGrouper {
     private static let cropMinHeightDrop = 0.05
     /// Mean absolute difference between two 32-sample column profiles
     /// (0...255 per sample) below which a pair is worth the sliding-window
-    /// check. Wide open on purpose for a first cut -- tighten once real
-    /// matches and misses have been logged and looked at on a real library.
-    private static let cropColumnGate: Double = 18
+    /// check. The first cut (18) turned out wide enough that a real
+    /// 180,000-photo library produced a single "similar" group of 559
+    /// visibly unrelated photos at level 10 -- chained together through
+    /// crop matches, which do not look at level at all. Tightened hard;
+    /// still a value to keep adjusting from real libraries, not a derived
+    /// constant.
+    private static let cropColumnGate: Double = 8
     /// How well the shorter photo's row profile has to fit somewhere inside
-    /// the taller one's, 0 (nothing alike) to 1 (identical). Same caveat.
-    private static let cropRowMatch: Double = 0.9
+    /// the taller one's, 0 (nothing alike) to 1 (identical). Same caveat and
+    /// same reason for moving it: 0.9 was loose enough to let the chain above
+    /// through.
+    private static let cropRowMatch: Double = 0.96
     /// Below this, a stretch of the image is close enough to a flat colour
     /// that almost anything would "fit" it -- sky, a wall, a stage
     /// background. Refusing to call a crop against a window this uniform is
     /// what keeps that from costing someone the full-frame photo instead of
-    /// the cut one.
-    private static let cropMinVariance: Double = 120
+    /// the cut one. Raised alongside the two gates above for the same reason.
+    private static let cropMinVariance: Double = 200
 
     struct CropOutcome {
         let cropped: Set<Int>

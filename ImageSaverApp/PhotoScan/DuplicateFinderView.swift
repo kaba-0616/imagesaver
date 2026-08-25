@@ -21,7 +21,11 @@ struct DuplicateFinderView: View {
     /// the control unusable.
     @State private var levelDisplay = Double(DuplicateLevel.standard)
     @State private var confirmingDelete = false
-    @State private var confirmingClear = false
+    /// Which tab's exclusions the confirmation alert is about, presented from
+    /// inside the settings sheet. The two tabs clear independently now, so
+    /// there is no single Bool left to ask "is the alert up".
+    @State private var confirmingClearKind: DuplicateGroup.Kind?
+    @State private var showingSettings = false
     @State private var message: String?
     @State private var showingLog = false
     @State private var preview: PreviewTarget?
@@ -43,13 +47,16 @@ struct DuplicateFinderView: View {
             .sheet(isPresented: $showingLog) {
                 PhotoScanLogSheet(log: PhotoScanLog.shared) { showingLog = false }
             }
+            .sheet(isPresented: $showingSettings) {
+                settingsSheet
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     // Deletion no longer re-groups on its own, so this is the
                     // one way back to a fresh pass once the user is ready for
                     // one -- on their schedule, not after every single delete.
                     Button {
-                        scanner.regroup(note: "手動再照合")
+                        scanner.regroup(note: "手動再照合", kind: tab)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -72,6 +79,11 @@ struct DuplicateFinderView: View {
                     // or grouping.
                     Button { showingLog = true } label: {
                         Image(systemName: "doc.text")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showingSettings = true } label: {
+                        Image(systemName: "gearshape")
                     }
                 }
             }
@@ -313,30 +325,69 @@ struct DuplicateFinderView: View {
                 if visibleGroups.isEmpty {
                     emptyState
                 } else {
-                    ForEach(visibleGroups) { group in
-                        card(group)
+                    ForEach(Array(visibleGroups.enumerated()), id: \.element.id) { index, group in
+                        card(group, number: index + 1)
                     }
                 }
                 footer
             }
             .padding(16)
         }
-        // On the scroll view rather than on the footer: the footer lives in a
-        // lazy stack and can be taken apart when it scrolls away, which would
-        // take the dialog with it.
-        .alert("除外をすべて解除しますか？", isPresented: $confirmingClear) {
-            Button("解除する", role: .destructive) {
-                Task { await clearRejections() }
+    }
+
+    // MARK: - Settings
+
+    private var settingsSheet: some View {
+        // NavigationView, not NavigationStack: this app still supports iOS 15.
+        NavigationView {
+            List {
+                clearSection(kind: .identical)
+                clearSection(kind: .similar)
             }
-            Button("やめる", role: .cancel) {}
-        } message: {
-            Text("これまでに「違う」とした\(scanner.rejectionCount)組がすべて元に戻り、また候補として表示されるようになります。写真は削除されません。")
+            .navigationTitle("設定")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("閉じる") { showingSettings = false }
+                }
+            }
+            // Presented from here rather than from the button that sets
+            // confirmingClearKind, so it works the same whether that press
+            // came from this sheet or (via `showingSettings = true`) from the
+            // empty state on the results screen.
+            .alert("除外をすべて解除しますか？",
+                  isPresented: Binding(
+                      get: { confirmingClearKind != nil },
+                      set: { if !$0 { confirmingClearKind = nil } }
+                  ),
+                  presenting: confirmingClearKind) { kind in
+                Button("解除する", role: .destructive) {
+                    Task { await clearRejections(kind: kind) }
+                }
+                Button("やめる", role: .cancel) {}
+            } message: { kind in
+                Text("「\(kind.tabLabel)」タブで「違う」とした\(scanner.rejectionCount(in: kind))組が元に戻り、また候補として表示されるようになります。写真は削除されません。")
+            }
         }
     }
 
-    private func card(_ group: DuplicateGroup) -> some View {
+    private func clearSection(kind: DuplicateGroup.Kind) -> some View {
+        Section(kind.tabLabel) {
+            HStack {
+                Text("「違う」として除外中")
+                Spacer()
+                Text("\(scanner.rejectionCount(in: kind))組")
+                    .foregroundColor(.secondary)
+            }
+            Button("除外をすべて解除") { confirmingClearKind = kind }
+                .disabled(scanner.rejectionCount(in: kind) == 0)
+        }
+    }
+
+    private func card(_ group: DuplicateGroup, number: Int) -> some View {
         DuplicateGroupCard(
             group: group,
+            number: number,
             selected: scanner.selected,
             details: scanner.details,
             showsCheckboxes: showsCheckboxes,
@@ -426,14 +477,14 @@ struct DuplicateFinderView: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
-            } else if scanner.rejectionCount > 0 {
+            } else if scanner.rejectionCount(in: tab) > 0 {
                 Text("すべて確認済みです")
                     .font(.headline)
-                Text("「違う」とした\(scanner.rejectionCount)組は、ここには表示していません。")
+                Text("「違う」とした\(scanner.rejectionCount(in: tab))組は、ここには表示していません。")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
-                Button("除外をすべて解除する") { confirmingClear = true }
+                Button("設定から除外を解除する") { showingSettings = true }
                     .font(.footnote)
             } else {
                 Text(tab.emptyLabel)
@@ -460,10 +511,7 @@ struct DuplicateFinderView: View {
                     .multilineTextAlignment(.center)
             }
             if scanner.rejectionCount > 0 {
-                Text("「違う」として除外中の組: \(scanner.rejectionCount)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Button("除外をすべて解除") { confirmingClear = true }
+                Text("「違う」として除外中の組: \(scanner.rejectionCount) (設定から解除できます)")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -589,8 +637,9 @@ struct DuplicateFinderView: View {
         message = describe(await scanner.undoRejection(), success: "「違う」を取り消しました。")
     }
 
-    private func clearRejections() async {
-        message = describe(await scanner.clearRejections(), success: "除外をすべて解除しました。")
+    private func clearRejections(kind: DuplicateGroup.Kind) async {
+        message = describe(await scanner.clearRejections(kind: kind),
+                           success: "「\(kind.tabLabel)」の除外をすべて解除しました。")
     }
 
     /// A rejection that was not stored must say so. Dropping the card anyway

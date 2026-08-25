@@ -114,6 +114,13 @@ final class DuplicateScanner: ObservableObject {
 
     private static let queue = DispatchQueue(label: "jp.kaba.imagesaver.photoscan",
                                              qos: .userInitiated)
+    /// Separate from `queue` on purpose: size lookups and cache writes used to
+    /// share it with grouping, so a slow size fetch over a huge tab could sit
+    /// in front of a user-requested regroup and block it before it had even
+    /// started -- invisible on the gauge, which has nothing to show for a job
+    /// that has not begun.
+    private static let ioQueue = DispatchQueue(label: "jp.kaba.imagesaver.photoscan.io",
+                                               qos: .utility)
 
     init() {
         PhotoScanLog.shared.beginRun()
@@ -302,10 +309,18 @@ final class DuplicateScanner: ObservableObject {
         level = next
         DuplicateLevel.store(next)
         log("判定レベル変更: \(next) (ハミング距離 \(DuplicateLevel.distance(for: next)))")
-        regroup(note: "レベル変更")
+        // The level has no bearing on what counts as an exact duplicate, so
+        // only the similar tab has anything to redo.
+        regroup(note: "レベル変更", kind: .similar)
     }
 
-    func regroup(note: String) {
+    /// `kind` is which tab to recompute -- `nil` means both, and only the
+    /// initial post-scan pass and a rejection's token-mismatch fallback with
+    /// no single group to point at ever ask for that. A manual reload or a
+    /// level change both know exactly which tab is in front of the user and
+    /// pass that instead, so the other tab's (possibly still-running) result
+    /// is never redone or discarded for a change that could not affect it.
+    func regroup(note: String, kind: DuplicateGroup.Kind?) {
         forgetUndo()
         // Ahead of the early return, not after it. A grouping in flight belongs
         // to the list being replaced either way, and one that lands after the
@@ -338,8 +353,9 @@ final class DuplicateScanner: ObservableObject {
         let token = groupToken
         let snapshot = fingerprints
         let level = self.level
-        let rejected = rejections.memberSets
-        let key = Self.computeCropCacheKey(snapshot, rejected: rejected)
+        let rejectedIdentical = rejections.memberSets(for: .identical)
+        let rejectedSimilar = rejections.memberSets(for: .similar)
+        let key = Self.computeCropCacheKey(snapshot, rejected: rejectedSimilar)
         let reusableCrop = (key == cropCacheKey) ? cropCache : nil
         let cropTimeShare = Self.storedCropShare()
         // Changing the sensitivity re-groups too, and swapping the results for
@@ -352,13 +368,32 @@ final class DuplicateScanner: ObservableObject {
             regrouping = nil
             phase = .grouping(fraction: 0, remaining: nil)
         }
-        // A completed regroup logs itself in `apply()`, but until now a
-        // started one did not -- so one that never finished (superseded, or
-        // the app backgrounded mid-pass) left only silence where the log
-        // should explain the gap.
+        // A completed regroup logs itself in `applyIdentical`/`applySimilar`,
+        // but until now a started one did not -- so one that never finished
+        // (superseded, or the app backgrounded mid-pass) left only silence
+        // where the log should explain the gap.
         log("照合(\(note))を開始: \(snapshot.count)枚")
 
+        let runIdentical = kind == nil || kind == .identical
+        let runSimilar = kind == nil || kind == .similar
+
         Self.queue.async {
+            // Identical first when both are asked for: it is an O(n) pass
+            // against `byExact`/`byBurst` alone, done in a fraction of a
+            // second next to the O(n²)+crop pass similar needs, so running
+            // it first gets the duplicate tab something to show while the
+            // slow one is still working.
+            if runIdentical {
+                let started = CFAbsoluteTimeGetCurrent()
+                let identicalGroups = DuplicateGrouper.groupIdentical(snapshot, rejected: rejectedIdentical)
+                let elapsed = PhotoScanFormat.milliseconds(since: started)
+                Task { @MainActor [weak self] in
+                    self?.applyIdentical(identicalGroups, token: token, milliseconds: elapsed,
+                                         isLast: !runSimilar, note: note)
+                }
+            }
+            guard runSimilar else { return }
+
             let started = CFAbsoluteTimeGetCurrent()
             let progress: @Sendable (Double) -> Void = { fraction in
                 let elapsed = CFAbsoluteTimeGetCurrent() - started
@@ -371,22 +406,16 @@ final class DuplicateScanner: ObservableObject {
                     self?.updateGrouping(fraction: fraction, remaining: remaining, token: token)
                 }
             }
-            let result = DuplicateGrouper.group(snapshot,
-                                                level: level,
-                                                rejected: rejected,
-                                                cropCache: reusableCrop,
-                                                cropTimeShare: cropTimeShare,
-                                                progress: progress)
+            let result = DuplicateGrouper.groupSimilar(snapshot,
+                                                       level: level,
+                                                       rejected: rejectedSimilar,
+                                                       cropCache: reusableCrop,
+                                                       cropTimeShare: cropTimeShare,
+                                                       progress: progress)
             let elapsed = PhotoScanFormat.milliseconds(since: started)
             Task { @MainActor [weak self] in
-                self?.apply(result.groups, token: token, milliseconds: elapsed,
-                           cropMS: result.cropMS,
-                           cropCandidatePairs: result.cropCandidatePairs,
-                           largestWidthBucket: result.largestWidthBucket,
-                           cropReused: result.cropReused,
-                           newCropCache: result.cropCache,
-                           newCropCacheKey: key,
-                           note: note)
+                self?.applySimilar(result, token: token, milliseconds: elapsed,
+                                   newCropCacheKey: key, note: note)
             }
         }
     }
@@ -406,7 +435,7 @@ final class DuplicateScanner: ObservableObject {
 
         // Saved first, then the card goes. A fingerprint can be made again; a
         // judgement about two photographs cannot.
-        switch await rejections.add(members) {
+        switch await rejections.add(members, kind: group.kind) {
         case .saved:
             break
         case .busy:
@@ -429,7 +458,7 @@ final class DuplicateScanner: ObservableObject {
         // -- which leaves this group out anyway, now that the decision is in.
         guard token == groupToken else {
             log("棄却: 保存中に一覧が入れ替わったため、記録だけ残して照合をやり直す")
-            regroup(note: "棄却の反映")
+            regroup(note: "棄却の反映", kind: group.kind)
             return .listChanged
         }
 
@@ -471,7 +500,7 @@ final class DuplicateScanner: ObservableObject {
         // list into another; a re-group brings it back properly instead.
         guard token == groupToken else {
             log("棄却の取り消し: 一覧が入れ替わっていたため照合をやり直す")
-            regroup(note: "棄却の取り消し")
+            regroup(note: "棄却の取り消し", kind: group.kind)
             return .listChanged
         }
         // A grouping that landed between the rejection and this press can have
@@ -480,7 +509,7 @@ final class DuplicateScanner: ObservableObject {
         // rows stop matching the photos under them.
         guard !groups.contains(where: { $0.id == group.id }) else {
             log("棄却の取り消し: 同じ組が既に一覧に戻っていたため照合をやり直す")
-            regroup(note: "棄却の取り消し")
+            regroup(note: "棄却の取り消し", kind: group.kind)
             return .listChanged
         }
         // Putting the card back is exact: removing the decision restores
@@ -492,9 +521,16 @@ final class DuplicateScanner: ObservableObject {
         return .done
     }
 
-    func clearRejections() async -> RejectOutcome {
-        let before = rejections.count
-        switch await rejections.removeAll() {
+    /// The count shown on the settings sheet for one tab, and the unit that
+    /// tab's "すべて解除" clears -- independent of the other tab's, since a
+    /// rejection now only ever affects the tab it was pressed on.
+    func rejectionCount(in kind: DuplicateGroup.Kind) -> Int {
+        rejections.count(for: kind)
+    }
+
+    func clearRejections(kind: DuplicateGroup.Kind) async -> RejectOutcome {
+        let before = rejections.count(for: kind)
+        switch await rejections.removeAll(kind: kind) {
         case .saved:
             break
         case .busy:
@@ -510,8 +546,8 @@ final class DuplicateScanner: ObservableObject {
             return .storeFull(pairs)
         }
         rejectionCount = rejections.count
-        log("棄却を全解除: \(before)組")
-        regroup(note: "棄却の全解除")
+        log("棄却を全解除(\(kind.tabLabel)): \(before)組")
+        regroup(note: "棄却の全解除", kind: kind)
         return .done
     }
 
@@ -588,7 +624,7 @@ final class DuplicateScanner: ObservableObject {
         // scan is in flight. Both happen in one turn, so nothing is drawn in
         // between.
         phase = .grouping(fraction: 0, remaining: nil)
-        regroup(note: "走査後の照合")
+        regroup(note: "走査後の照合", kind: nil)
     }
 
     private func updateGrouping(fraction: Double, remaining: TimeInterval?, token: Int) {
@@ -600,44 +636,84 @@ final class DuplicateScanner: ObservableObject {
         }
     }
 
-    private func apply(_ result: [DuplicateGroup], token: Int, milliseconds: Int,
-                       cropMS: Int, cropCandidatePairs: Int, largestWidthBucket: Int,
-                       cropReused: Bool, newCropCache: DuplicateGrouper.CropCache?,
-                       newCropCacheKey: CropCacheKey, note: String) {
+    /// The exact-match/burst pass. Fast enough that on a fresh scan it lands
+    /// well before the similar pass finishes -- `isLast` says whether this is
+    /// the only pass this `regroup()` asked for (a duplicate-tab-only reload,
+    /// say), in which case this is the one that has to close things out.
+    private func applyIdentical(_ result: [DuplicateGroup], token: Int, milliseconds: Int,
+                                isLast: Bool, note: String) {
         guard token == groupToken else { return }
-        cropCache = newCropCache
+        replaceGroups(kind: .identical, with: result)
+
+        let photos = result.reduce(0) { $0 + $1.members.count }
+        log("照合(\(note)/重複): \(milliseconds)ms / \(result.count)組\(photos)枚 / 棄却\(rejectionCount(in: .identical))組")
+        log("重複の組サイズ: " + result.map { String($0.members.count) }.joined(separator: ","))
+        updateReport()
+
+        if isLast {
+            finishRegroup()
+        } else if phase != .ready {
+            // The full-screen spinner (a fresh scan's own re-group, never a
+            // manual one -- that only ever starts from .ready) has done its
+            // job now that there is something to show. The still-running
+            // similar pass carries on behind the thin bar over the list
+            // instead, the same as any other regroup started from .ready.
+            phase = .ready
+            regrouping = Regrouping(fraction: 0, remaining: nil)
+        }
+    }
+
+    private func applySimilar(_ result: DuplicateGrouper.Result, token: Int, milliseconds: Int,
+                              newCropCacheKey: CropCacheKey, note: String) {
+        guard token == groupToken else { return }
+        cropCache = result.cropCache
         cropCacheKey = newCropCacheKey
-        if !cropReused { Self.storeCropShare(cropMS: cropMS, totalMS: milliseconds) }
-        groups = result
+        if !result.cropReused { Self.storeCropShare(cropMS: result.cropMS, totalMS: milliseconds) }
+        replaceGroups(kind: .similar, with: result.groups)
+
+        let photos = result.groups.reduce(0) { $0 + $1.members.count }
+        let largest = result.groups.map(\.members.count).max() ?? 0
+        let croppedGroups = result.groups.filter { !$0.croppedIdentifiers.isEmpty }.count
+        let croppedPhotos = result.groups.reduce(0) { $0 + $1.croppedIdentifiers.count }
+        log("照合(\(note)/類似): レベル\(level) ハミング距離\(DuplicateLevel.distance(for: level)) / \(milliseconds)ms / \(result.groups.count)組\(photos)枚 / 最大の組\(largest)枚 / 棄却\(rejectionCount(in: .similar))組")
+        if result.cropReused {
+            log("トリミング候補: 前回の結果を再利用 (最大の同一幅グループ\(result.largestWidthBucket)枚 / 検査した組\(result.cropCandidatePairs)組)")
+        } else {
+            log("トリミング候補: 最大の同一幅グループ\(result.largestWidthBucket)枚 / 検査した組\(result.cropCandidatePairs)組 / \(result.cropMS)ms")
+        }
+        log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚")
+        log("類似の組サイズ: " + result.groups.map { String($0.members.count) }.joined(separator: ","))
+        updateReport()
+
+        finishRegroup()
+    }
+
+    /// Swaps in one tab's freshly computed groups, leaving the other tab's
+    /// exactly as they were -- the point of splitting the two passes apart.
+    private func replaceGroups(kind: DuplicateGroup.Kind, with newGroups: [DuplicateGroup]) {
+        groups = groups.filter { $0.kind != kind } + newGroups
         refreshGroupIndex()
         // The list held for the undo came out of the generation before this
         // one. Keeping it would let 取り消す splice a card from the old list
         // into the new one, where the same id can already be present.
         forgetUndo()
-        regrouping = nil
-        phase = .ready
+    }
 
-        let identical = result.filter { $0.kind == .identical }
-        let similar = result.filter { $0.kind == .similar }
+    private func updateReport() {
+        let identical = groups.filter { $0.kind == .identical }
+        let similar = groups.filter { $0.kind == .similar }
         let identicalPhotos = identical.reduce(0) { $0 + $1.members.count }
         let similarPhotos = similar.reduce(0) { $0 + $1.members.count }
-        let largest = result.map(\.members.count).max() ?? 0
-
         report = scanReport
-            + " / 照合 \(milliseconds)ms"
             + " / 重複 \(identical.count)組 \(identicalPhotos)枚"
             + " / 類似 \(similar.count)組 \(similarPhotos)枚"
-        reportMissingSizes(in: result, pending: true)
-        let croppedGroups = result.filter { !$0.croppedIdentifiers.isEmpty }.count
-        let croppedPhotos = result.reduce(0) { $0 + $1.croppedIdentifiers.count }
-        log("照合(\(note)): レベル\(level) ハミング距離\(DuplicateLevel.distance(for: level)) / \(milliseconds)ms / 重複\(identical.count)組\(identicalPhotos)枚 / 類似\(similar.count)組\(similarPhotos)枚 / 最大の組\(largest)枚 / 棄却\(rejectionCount)組")
-        if cropReused {
-            log("トリミング候補: 前回の結果を再利用 (最大の同一幅グループ\(largestWidthBucket)枚 / 検査した組\(cropCandidatePairs)組)")
-        } else {
-            log("トリミング候補: 最大の同一幅グループ\(largestWidthBucket)枚 / 検査した組\(cropCandidatePairs)組 / \(cropMS)ms")
-        }
-        log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚")
+        reportMissingSizes(in: groups, pending: true)
+    }
 
+    /// The tail both passes share once whichever of them is last has landed.
+    private func finishRegroup() {
+        regrouping = nil
+        phase = .ready
         loadDetails()
         // The next thing to happen might be the app going away -- deleting,
         // closing the screen, or (now that a large library's crop pass can
@@ -745,7 +821,7 @@ final class DuplicateScanner: ObservableObject {
         }
 
         let token = groupToken
-        Self.queue.async {
+        Self.ioQueue.async {
             let started = CFAbsoluteTimeGetCurrent()
             let found = AssetDetailReader.details(for: wanted)
             let elapsed = PhotoScanFormat.milliseconds(since: started)
@@ -840,7 +916,7 @@ final class DuplicateScanner: ObservableObject {
             return
         }
         let snapshot = fingerprints
-        Self.queue.async { FingerprintCache.save(snapshot) }
+        Self.ioQueue.async { FingerprintCache.save(snapshot) }
     }
 
     private func log(_ text: String) {

@@ -9,6 +9,11 @@ import SwiftUI
 struct DuplicateGroupCard: View {
 
     let group: DuplicateGroup
+    /// Position within the tab's list, 1-based. The label on its own repeats
+    /// "似ている写真" on every card with nothing to tell one from another in
+    /// conversation ("あの組" means nothing); a number gives each card a
+    /// name a person can actually refer back to.
+    let number: Int
     let selected: Set<String>
     let details: [String: AssetDetail]
     let showsCheckboxes: Bool
@@ -45,11 +50,11 @@ struct DuplicateGroupCard: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             if group.isCleanedUp {
-                Text("クリーンアップ完了")
+                Text("クリーンアップ完了\(number)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.green)
             } else {
-                Text(group.kind.label)
+                Text("\(group.kind.label)\(number)")
                     .font(.subheadline.weight(.semibold))
             }
             Text(subtitle)
@@ -227,17 +232,21 @@ struct DuplicateGroupCard: View {
         .buttonStyle(.plain)
     }
 
+    /// Always two lines, the second blank when it does not apply. A grid row
+    /// sizes itself to its tallest cell and then centres shorter ones in it --
+    /// so a caption that only sometimes carries a second line left the
+    /// thumbnail above it sitting at a different height than its neighbours.
     private func caption(_ member: PhotoFingerprint) -> some View {
-        VStack(spacing: 0) {
+        let isKeep = member.localIdentifier == group.suggestedKeep.localIdentifier
+        return VStack(spacing: 0) {
             Text(sizeText(member))
                 .font(.system(size: 9))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
-            if member.localIdentifier == group.suggestedKeep.localIdentifier {
-                Text("残す候補")
-                    .font(.system(size: 8))
-                    .foregroundColor(.green)
-            }
+            Text(isKeep ? "残す候補" : " ")
+                .font(.system(size: 8))
+                .foregroundColor(.green)
+                .opacity(isKeep ? 1 : 0)
         }
     }
 
