@@ -41,6 +41,7 @@ struct DuplicatePreviewView: View {
             VStack(spacing: 0) {
                 topBar
                 Spacer(minLength: 0)
+                filmstrip
                 bottomBar
             }
         }
@@ -126,6 +127,52 @@ struct DuplicatePreviewView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Filmstrip
+
+    /// A page dot says which of twelve you are on. It does not say which
+    /// twelve, and these are near-identical frames of one moment -- so the
+    /// group itself goes along the bottom, current one lit.
+    @ViewBuilder
+    private var filmstrip: some View {
+        if members.count > 1 {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 6) {
+                        ForEach(Array(members.enumerated()),
+                                id: \.element.localIdentifier) { offset, member in
+                            filmstripTile(member, at: offset).id(offset)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                .frame(height: 68)
+                .background(Color.black.opacity(0.45))
+                .onChange(of: index) { moved in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(moved, anchor: .center)
+                    }
+                }
+            }
+        }
+    }
+
+    private func filmstripTile(_ member: PhotoFingerprint, at offset: Int) -> some View {
+        let current = offset == index
+        let chosen = scanner.selected.contains(member.localIdentifier)
+        return AssetThumbnail(identifier: member.localIdentifier, side: 52)
+            .cornerRadius(4)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(current ? Color.accentColor
+                                          : (chosen ? Color.white.opacity(0.8) : Color.clear),
+                                  lineWidth: current ? 3 : 2)
+            )
+            .opacity(current ? 1 : 0.5)
+            .contentShape(Rectangle())
+            .onTapGesture { index = offset }
     }
 
     // MARK: - Bars

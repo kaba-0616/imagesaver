@@ -97,7 +97,9 @@ struct DuplicateGroupCard: View {
 
     private var strip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 8) {
+            // Tops, not centres. Only the kept tile carries a second
+            // caption line, and centring lifted it above its neighbours.
+            LazyHStack(alignment: .top, spacing: 8) {
                 ForEach(Array(group.members.enumerated()), id: \.element.localIdentifier) { index, member in
                     tile(member, at: index)
                 }

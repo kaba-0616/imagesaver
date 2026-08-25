@@ -227,6 +227,20 @@ final class DuplicateScanner: ObservableObject {
         // to the list being replaced either way, and one that lands after the
         // list has been emptied puts already deleted photos back on screen.
         groupToken += 1
+
+        // Nothing is grouped while a scan is running. The fingerprints this
+        // would work from are the ones the scan is in the middle of replacing,
+        // and its own re-group at the end covers whatever asked for this one --
+        // the level, the rejections and the deletions are all read then. Left
+        // to run, it would land .ready on top of the progress screen instead.
+        switch phase {
+        case .counting, .scanning:
+            log("照合(\(note)): 走査中のため、走査の完了後にまとめて行う")
+            return
+        case .idle, .grouping, .ready:
+            break
+        }
+
         guard fingerprints.count > 1 else {
             groups = []
             refreshGroupIndex()
@@ -432,7 +446,7 @@ final class DuplicateScanner: ObservableObject {
             fingerprints.removeAll { targets.contains($0.localIdentifier) }
             selected.subtract(targets)
             saveFingerprints()
-            regroup(note: "削除後の再照合")
+            pruneGroups(removing: targets)
             return .done(assets.count)
         } catch {
             // PHPhotosErrorUserCancelled and NSUserCancelledError are both
@@ -464,6 +478,10 @@ final class DuplicateScanner: ObservableObject {
             log("[!] 指紋の保存を見送った: 権限が「選択した写真のみ」のため、見えている\(outcome.total)枚で全体を上書きしない (次回は再計算になる)")
         }
         PhotoScanLog.shared.flush()
+        // Out of .scanning before the re-group, which refuses to run while a
+        // scan is in flight. Both happen in one turn, so nothing is drawn in
+        // between.
+        phase = .grouping(fraction: 0, remaining: nil)
         regroup(note: "走査後の照合")
     }
 
@@ -513,6 +531,40 @@ final class DuplicateScanner: ObservableObject {
     /// labels ask for them several times per body evaluation and `selected` is
     /// published, so every tick of a checkbox would otherwise walk every
     /// member of every group again.
+    /// Deleting can only ever shrink a group: nothing that was unalike
+    /// becomes alike because a third picture went away. Re-running the whole
+    /// comparison for that cost 19 seconds on a library of 180,000 photos, so
+    /// the groups are trimmed where they stand instead.
+    private func pruneGroups(removing gone: Set<String>) {
+        let started = Date()
+        var kept: [DuplicateGroup] = []
+        kept.reserveCapacity(groups.count)
+        var emptied = 0
+        for group in groups {
+            let members = group.members.filter { !gone.contains($0.localIdentifier) }
+            if members.count == group.members.count {
+                kept.append(group)
+                continue
+            }
+            guard members.count > 1 else {
+                emptied += 1
+                continue
+            }
+            kept.append(DuplicateGroup(id: group.id,
+                                       kind: group.kind,
+                                       members: members,
+                                       hasRejectedPair: group.hasRejectedPair))
+        }
+        groups = kept
+        refreshGroupIndex()
+        forgetUndo()
+        let identical = kept.filter { $0.kind == .identical }.count
+        let similar = kept.filter { $0.kind == .similar }.count
+        log("削除後の整理: \(Int(Date().timeIntervalSince(started) * 1000))ms"
+            + " / 1枚だけになり消えた組 \(emptied)組"
+            + " / 重複\(identical)組 / 類似\(similar)組")
+    }
+
     private func refreshGroupIndex() {
         var lists: [DuplicateGroup.Kind: [DuplicateGroup]] = [:]
         var identifiers: [DuplicateGroup.Kind: Set<String>] = [:]
