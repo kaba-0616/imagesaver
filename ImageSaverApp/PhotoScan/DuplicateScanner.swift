@@ -98,6 +98,13 @@ final class DuplicateScanner: ObservableObject {
     /// Monotonic. A slower grouping started earlier must not be allowed to
     /// land on top of a newer one.
     private var groupToken = 0
+    /// A regular app is never granted indefinite background execution --
+    /// there is no entitlement here that would qualify it for one. This buys
+    /// whatever grace period iOS is willing to give (historically tens of
+    /// seconds to a few minutes, never guaranteed) before the process is
+    /// suspended, so a scan started just before backgrounding has some chance
+    /// of reaching a safe point rather than being cut off mid-write.
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private static let queue = DispatchQueue(label: "jp.kaba.imagesaver.photoscan",
                                              qos: .userInitiated)
@@ -171,6 +178,32 @@ final class DuplicateScanner: ObservableObject {
         selected.subtract(identifiers(in: kind))
     }
 
+    // MARK: - Background time
+
+    /// Idempotent: scan() and regroup() both call this, and a scan's own
+    /// regroup at the end must not open a second task on top of the one scan()
+    /// already holds.
+    private func beginBackgroundWork() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PhotoScan") { [weak self] in
+            // UIKit calls this on the main thread, but its closure type does
+            // not say so to the compiler -- hopped explicitly, the same way
+            // every other callback into this class crosses from off the
+            // actor, rather than assumed safe because it usually is.
+            Task { @MainActor [weak self] in
+                self?.log("[!] バックグラウンド時間切れ (iOSがまもなく一時停止します)")
+                PhotoScanLog.shared.flush()
+                self?.endBackgroundWork()
+            }
+        }
+    }
+
+    private func endBackgroundWork() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+
     // MARK: - Scan
 
     func scan() {
@@ -185,6 +218,7 @@ final class DuplicateScanner: ObservableObject {
         // lets scan() be started a second time on top of the first.
         groupToken += 1
         regrouping = nil
+        beginBackgroundWork()
         log("走査開始 / 権限 \(Self.accessLabel(access))")
 
         let counted: @Sendable (Int, Int) -> Void = { total, toCompute in
@@ -230,6 +264,7 @@ final class DuplicateScanner: ObservableObject {
         // to the list being replaced either way, and one that lands after the
         // list has been emptied puts already deleted photos back on screen.
         groupToken += 1
+        beginBackgroundWork()
 
         // Nothing is grouped while a scan is running. The fingerprints this
         // would work from are the ones the scan is in the middle of replacing,
@@ -249,6 +284,7 @@ final class DuplicateScanner: ObservableObject {
             refreshGroupIndex()
             regrouping = nil
             phase = .ready
+            endBackgroundWork()
             return
         }
 
@@ -287,7 +323,10 @@ final class DuplicateScanner: ObservableObject {
             let elapsed = PhotoScanFormat.milliseconds(since: started)
             Task { @MainActor [weak self] in
                 self?.apply(result.groups, token: token, milliseconds: elapsed,
-                           cropVerifyMS: result.cropVerifyMS, note: note)
+                           cropMS: result.cropMS,
+                           cropCandidatePairs: result.cropCandidatePairs,
+                           largestWidthBucket: result.largestWidthBucket,
+                           note: note)
             }
         }
     }
@@ -501,7 +540,8 @@ final class DuplicateScanner: ObservableObject {
         }
     }
 
-    private func apply(_ result: [DuplicateGroup], token: Int, milliseconds: Int, cropVerifyMS: Int, note: String) {
+    private func apply(_ result: [DuplicateGroup], token: Int, milliseconds: Int,
+                       cropMS: Int, cropCandidatePairs: Int, largestWidthBucket: Int, note: String) {
         guard token == groupToken else { return }
         groups = result
         refreshGroupIndex()
@@ -526,9 +566,16 @@ final class DuplicateScanner: ObservableObject {
         let croppedGroups = result.filter { !$0.croppedIdentifiers.isEmpty }.count
         let croppedPhotos = result.reduce(0) { $0 + $1.croppedIdentifiers.count }
         log("照合(\(note)): レベル\(level) ハミング距離\(DuplicateLevel.distance(for: level)) / \(milliseconds)ms / 重複\(identical.count)組\(identicalPhotos)枚 / 類似\(similar.count)組\(similarPhotos)枚 / 最大の組\(largest)枚 / 棄却\(rejectionCount)組")
-        log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚 / 検証\(cropVerifyMS)ms")
+        log("トリミング候補: 最大の同一幅グループ\(largestWidthBucket)枚 / 検査した組\(cropCandidatePairs)組 / \(cropMS)ms")
+        log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚")
 
         loadDetails()
+        // The next thing to happen might be the app going away -- deleting,
+        // closing the screen, or (now that a large library's crop pass can
+        // take real time) simply running out of foreground time. A lost 照合
+        // line is a line nobody can explain not seeing later.
+        PhotoScanLog.shared.flush()
+        endBackgroundWork()
     }
 
     /// Called by everything that replaces `groups`, and the only place either
@@ -833,10 +880,17 @@ final class DuplicateScanner: ObservableObject {
             if index % 25 == 0 {
                 let elapsed = CFAbsoluteTimeGetCurrent() - started
                 let toReuse = max(0, total - toCompute)
-                // Nothing is shown until both populations have been sampled
-                // enough to be worth believing.
-                let sampled = computeSamples >= min(20, toCompute)
-                    && reuseSamples >= min(20, toReuse)
+                // A population too small to move the total by much does not
+                // need to be sampled before an estimate is shown -- its
+                // average barely matters either way. Without this, a scan
+                // right after the cache was invalidated (toReuse near zero,
+                // everyone needs computing) waited on however many reused
+                // photos happened to exist to show up in enumeration order,
+                // which could be never before the last few percent of a
+                // 180,000-photo pass.
+                let negligible = max(20, total / 100)
+                let sampled = (toCompute < negligible || computeSamples >= min(20, toCompute))
+                    && (toReuse < negligible || reuseSamples >= min(20, toReuse))
                 var remaining: TimeInterval?
                 if sampled && elapsed >= 2 {
                     let computeLeft = max(0, toCompute - computeSamples)

@@ -163,6 +163,7 @@ struct DuplicateFinderView: View {
             Text("写真を数えています…")
                 .font(.footnote)
                 .foregroundColor(.secondary)
+            stayForegroundNotice
         }
         .padding(32)
     }
@@ -176,6 +177,7 @@ struct DuplicateFinderView: View {
             Text(remainingText(remaining))
                 .font(.caption)
                 .foregroundColor(.secondary)
+            stayForegroundNotice
         }
         .padding(32)
     }
@@ -189,8 +191,22 @@ struct DuplicateFinderView: View {
             Text(remainingText(remaining))
                 .font(.caption)
                 .foregroundColor(.secondary)
+            stayForegroundNotice
         }
         .padding(32)
+    }
+
+    /// A regular app is never given indefinite time in the background -- iOS
+    /// suspends it after a short, unpredictable grace period regardless of
+    /// what it is in the middle of. This is the honest version of "can I
+    /// switch apps and come back": for a moment, maybe; for as long as this
+    /// takes, no.
+    private var stayForegroundNotice: some View {
+        Text("この画面を開いたままにしてください。バックグラウンドに切り替えると、iOSにより中断されることがあります。")
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.top, 4)
     }
 
     /// An estimate is only shown once the scan is willing to stand behind one.

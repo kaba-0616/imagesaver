@@ -124,17 +124,26 @@ enum DuplicateGrouper {
     /// pairs is this function own job because the indices belong to it.
     struct Result {
         let groups: [DuplicateGroup]
-        /// Time actually spent in the sliding-window crop verification, not
-        /// the cheap gates ahead of it -- those are folded into the loop's own
-        /// reported time, same as everything else in it.
-        let cropVerifyMS: Int
+        /// The crop pass now runs on its own, so its own time is all of it --
+        /// gates included, not just the sliding-window step.
+        let cropMS: Int
+        /// How many pairs made it past the width bucket and the cheap gates to
+        /// the actual sliding-window comparison. The number that says whether
+        /// a slow crop pass is because one width bucket is enormous, or
+        /// something else entirely.
+        let cropCandidatePairs: Int
+        /// The largest group of photos sharing one exact pixel width -- the
+        /// number a slow crop pass is almost certainly explained by.
+        let largestWidthBucket: Int
     }
 
     static func group(_ prints: [PhotoFingerprint],
                       level: Int,
                       rejected: [Set<String>],
                       progress: (@Sendable (Double) -> Void)? = nil) -> Result {
-        guard prints.count > 1 else { return Result(groups: [], cropVerifyMS: 0) }
+        guard prints.count > 1 else {
+            return Result(groups: [], cropMS: 0, cropCandidatePairs: 0, largestWidthBucket: 0)
+        }
         let count = prints.count
 
         var indexByID: [String: Int] = [:]
@@ -193,24 +202,11 @@ enum DuplicateGrouper {
         // reaching through a struct for each field is most of the cost.
         let coarse = prints.map(\.coarse)
         let aspects = prints.map(\.aspect)
-        let widths = prints.map(\.width)
-        let heights = prints.map(\.height)
-        let colProfiles = prints.map(\.colProfile)
-        let rowProfiles = prints.map(\.rowProfile)
         let threshold = DuplicateLevel.distance(for: level)
         let hasRejections = !rejectedPairs.isEmpty
         // The work is a triangle, so i/n would claim half done a quarter of the
         // way through. Pairs are what actually gets done.
         let totalPairs = count * (count - 1) / 2
-
-        // Every pair the ordinary pass above rejects also gets a look here --
-        // top/bottom cropped, its aspect ratio has moved too far for the gate
-        // above to ever consider it the same picture. Filtered by two integer
-        // comparisons before anything resembling real work runs, because this
-        // branch is reached for the overwhelming majority of the same 1.66e10
-        // pairs a 180,000-photo library produces.
-        var croppedIndices = Set<Int>()
-        var cropVerifyMS: Double = 0
 
         for i in 0..<count {
             if let progress, i % 256 == 0, totalPairs > 0 {
@@ -220,52 +216,32 @@ enum DuplicateGrouper {
             let hashI = coarse[i]
             let aspectI = aspects[i]
             for j in (i + 1)..<count {
-                if (hashI ^ coarse[j]).nonzeroBitCount <= threshold {
-                    // A portrait and a landscape squashed onto the same grid can
-                    // score alike without looking alike. Written as a positive
-                    // test so a NaN -- either side missing its pixel size --
-                    // fails it rather than slipping through two negative ones.
-                    let ratio = aspectI / aspects[j]
-                    if ratio >= 0.88 && ratio <= 1.14 {
-                        if !(hasRejections && rejectedPairs.contains(pairKey(i, j))) {
-                            sets.union(i, j)
-                        }
-                        continue
-                    }
-                }
-
-                // Cheap crop gate: same real width (a vertical-only crop keeps
-                // it), meaningfully different height, before touching either
-                // profile.
-                let wa = widths[i], wb = widths[j]
-                guard wa > 0, wb > 0,
-                      abs(wa - wb) * 50 <= max(wa, wb) else { continue }
-                let ha = heights[i], hb = heights[j]
-                guard ha != hb else { continue }
-                let shorter = min(ha, hb), taller = max(ha, hb)
-                guard Double(shorter) <= Double(taller) * (1 - cropMinHeightDrop) else { continue }
-                guard let colA = colProfiles[i], let colB = colProfiles[j],
-                      meanAbsDifference(colA, colB) <= cropColumnGate else { continue }
-                guard let rowA = rowProfiles[ha > hb ? i : j],
-                      let rowB = rowProfiles[ha > hb ? j : i] else { continue }
+                if (hashI ^ coarse[j]).nonzeroBitCount > threshold { continue }
+                // A portrait and a landscape squashed onto the same grid can
+                // score alike without looking alike. Written as a positive test
+                // so a NaN -- either side missing its pixel size -- fails it
+                // rather than slipping through two negative ones.
+                let ratio = aspectI / aspects[j]
+                if !(ratio >= 0.88 && ratio <= 1.14) { continue }
                 if hasRejections && rejectedPairs.contains(pairKey(i, j)) { continue }
-
-                let verifyStarted = CFAbsoluteTimeGetCurrent()
-                let match = bestCropOffset(full: rowA, crop: rowB)
-                cropVerifyMS += (CFAbsoluteTimeGetCurrent() - verifyStarted) * 1000
-
-                guard let match, match.score >= cropRowMatch else { continue }
-                // subdata(in:) indexes from rowA's own startIndex, not
-                // necessarily 0 -- offset is a count from the front either way.
-                let base = rowA.startIndex + match.offset
-                let window = rowA.subdata(in: base..<(base + rowB.count))
-                guard variance(of: window) >= cropMinVariance else { continue }
-
                 sets.union(i, j)
-                croppedIndices.insert(ha > hb ? j : i)
             }
         }
         progress?(1)
+
+        // Crop detection is a separate pass, not fused into the loop above.
+        // It used to be, gated per-pair on width alone -- but a real camera
+        // roll concentrates tens of thousands of photos onto a handful of
+        // resolutions, so that gate let hundreds of millions of pairs through
+        // to the profile comparison before the O(n²) similarity loop even
+        // finished its first slice. Bucketing by width first means only
+        // same-width pairs are ever looked at, which is the same set of pairs
+        // the old gate eventually reached anyway -- just found in a sum of
+        // small squares instead of one enormous one.
+        let cropOutcome = cropMatches(prints, in: &sets,
+                                      rejectedPairs: rejectedPairs,
+                                      hasRejections: hasRejections)
+        let croppedIndices = cropOutcome.cropped
 
         var buckets: [Int: [Int]] = [:]
         for index in 0..<count {
@@ -303,7 +279,10 @@ enum DuplicateGrouper {
             }
             return lhs.id < rhs.id
         }
-        return Result(groups: sorted, cropVerifyMS: Int(cropVerifyMS.rounded()))
+        return Result(groups: sorted,
+                     cropMS: cropOutcome.milliseconds,
+                     cropCandidatePairs: cropOutcome.candidatePairs,
+                     largestWidthBucket: cropOutcome.largestBucket)
     }
 
     static func kind(of members: [PhotoFingerprint]) -> DuplicateGroup.Kind {
@@ -359,6 +338,75 @@ enum DuplicateGrouper {
     /// what keeps that from costing someone the full-frame photo instead of
     /// the cut one.
     private static let cropMinVariance: Double = 120
+
+    struct CropOutcome {
+        let cropped: Set<Int>
+        let milliseconds: Int
+        let candidatePairs: Int
+        let largestBucket: Int
+    }
+
+    /// Bucketed by exact pixel width first, so only same-width pairs are ever
+    /// compared. A camera roll concentrates tens of thousands of photos onto a
+    /// handful of resolutions; checking width per-pair inside the main O(n²)
+    /// loop (the first cut of this feature) still paid for every pair in the
+    /// largest such cluster before ever rejecting one, which is where a
+    /// 180,000-photo library's crop pass stopped making visible progress.
+    ///
+    /// Widths within the old 2% tolerance are no longer merged across
+    /// buckets: a tool that also resizes on crop would be missed here. Trading
+    /// that away is what makes bucketing possible at all -- revisit only if a
+    /// real library shows it costing real matches.
+    private static func cropMatches(_ prints: [PhotoFingerprint],
+                                    in sets: inout DisjointSet,
+                                    rejectedPairs: Set<Int64>,
+                                    hasRejections: Bool) -> CropOutcome {
+        let started = CFAbsoluteTimeGetCurrent()
+        var widthBuckets: [Int: [Int]] = [:]
+        for (index, print) in prints.enumerated() where print.width > 0 {
+            widthBuckets[print.width, default: []].append(index)
+        }
+
+        var cropped = Set<Int>()
+        var candidatePairs = 0
+        var largestBucket = 0
+
+        for (_, indices) in widthBuckets where indices.count > 1 {
+            largestBucket = max(largestBucket, indices.count)
+            for a in 0..<(indices.count - 1) {
+                let i = indices[a]
+                let ha = prints[i].height
+                for b in (a + 1)..<indices.count {
+                    let j = indices[b]
+                    let hb = prints[j].height
+                    guard ha != hb else { continue }
+                    let shorter = min(ha, hb), taller = max(ha, hb)
+                    guard Double(shorter) <= Double(taller) * (1 - cropMinHeightDrop) else { continue }
+                    guard let colA = prints[i].colProfile, let colB = prints[j].colProfile,
+                          meanAbsDifference(colA, colB) <= cropColumnGate else { continue }
+                    guard let rowA = prints[ha > hb ? i : j].rowProfile,
+                          let rowB = prints[ha > hb ? j : i].rowProfile else { continue }
+                    if hasRejections && rejectedPairs.contains(pairKey(i, j)) { continue }
+
+                    candidatePairs += 1
+                    guard let match = bestCropOffset(full: rowA, crop: rowB),
+                          match.score >= cropRowMatch else { continue }
+                    // subdata(in:) indexes from rowA's own startIndex, not
+                    // necessarily 0 -- offset is a count from the front either way.
+                    let base = rowA.startIndex + match.offset
+                    let window = rowA.subdata(in: base..<(base + rowB.count))
+                    guard variance(of: window) >= cropMinVariance else { continue }
+
+                    sets.union(i, j)
+                    cropped.insert(ha > hb ? j : i)
+                }
+            }
+        }
+
+        let elapsed = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
+        return CropOutcome(cropped: cropped, milliseconds: elapsed,
+                           candidatePairs: candidatePairs, largestBucket: largestBucket)
+    }
 
     private static func meanAbsDifference(_ a: Data, _ b: Data) -> Double {
         guard a.count == b.count, !a.isEmpty else { return .infinity }
