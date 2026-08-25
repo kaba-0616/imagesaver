@@ -25,6 +25,10 @@ struct DuplicateFinderView: View {
     @State private var message: String?
     @State private var showingLog = false
     @State private var preview: PreviewTarget?
+    /// On by default, matching how the screen always behaved before this
+    /// switch existed. Off only hides the circles -- selection made while
+    /// they were showing is untouched, and the bulk actions still work.
+    @State private var showsCheckboxes = true
 
     var body: some View {
         content
@@ -50,6 +54,20 @@ struct DuplicateFinderView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                     .disabled(scanner.phase != .ready)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showsCheckboxes.toggle() } label: {
+                        Image(systemName: showsCheckboxes ? "checkmark.circle" : "circle.dashed")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    // Reachable regardless of phase: the footer copy of this
+                    // button only exists once results are on screen, and
+                    // nothing at all was reachable while counting, scanning
+                    // or grouping.
+                    Button { showingLog = true } label: {
+                        Image(systemName: "doc.text")
+                    }
                 }
             }
             .fullScreenCover(item: $preview) { target in
@@ -316,6 +334,7 @@ struct DuplicateFinderView: View {
             group: group,
             selected: scanner.selected,
             details: scanner.details,
+            showsCheckboxes: showsCheckboxes,
             onToggle: { identifier in scanner.toggle(identifier) },
             onSelectGroup: { scanner.selectGroupButBest(group) },
             onDeselectGroup: { scanner.deselectGroup(group) },

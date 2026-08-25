@@ -88,6 +88,12 @@ final class DuplicateScanner: ObservableObject {
     private var fingerprints: [PhotoFingerprint] = []
     private var scanReport = ""
     private let rejections = RejectedPairs()
+    /// What the last completed crop pass found, and the snapshot it found it
+    /// against. Crop detection does not depend on `level`, so a threshold
+    /// change alone leaves this valid -- checked by `cropCacheKey` below
+    /// before it is ever handed back in.
+    private var cropCache: DuplicateGrouper.CropCache?
+    private var cropCacheKey: CropCacheKey?
     private var undoGroup: DuplicateGroup?
     private var undoPosition = 0
     /// Per tab views of `groups`, rebuilt once whenever it changes. Read on
@@ -204,6 +210,47 @@ final class DuplicateScanner: ObservableObject {
         backgroundTask = .invalid
     }
 
+    // MARK: - Crop cache
+
+    /// Cheap enough to compute on every regroup: a scan or a delete always
+    /// changes the count, and the identifiers pinned down here are the ones
+    /// most likely to move if the snapshot changed in some subtler way. Not a
+    /// perfect fingerprint of the array -- a full one would cost as much as
+    /// redoing the crop pass it exists to avoid.
+    private struct CropCacheKey: Equatable {
+        let count: Int
+        let firstID: String?
+        let lastID: String?
+        let rejectedSignature: Int
+    }
+
+    private static func computeCropCacheKey(_ prints: [PhotoFingerprint], rejected: [Set<String>]) -> CropCacheKey {
+        var signature = rejected.count
+        for decision in rejected { signature ^= decision.hashValue }
+        return CropCacheKey(count: prints.count,
+                            firstID: prints.first?.localIdentifier,
+                            lastID: prints.last?.localIdentifier,
+                            rejectedSignature: signature)
+    }
+
+    /// How much of the last real (non-cached) crop pass's time went to the
+    /// crop pass itself, out of the whole grouping. Persisted across launches
+    /// because the split is a property of the library and the device, not of
+    /// any one run -- so the very first estimate after opening the app fresh
+    /// can already be close, instead of starting from a guess every time.
+    private static let cropShareKey = "photoScanCropTimeShare"
+
+    private static func storedCropShare() -> Double {
+        let value = UserDefaults.standard.double(forKey: cropShareKey)
+        return value > 0 ? min(max(value, 0.05), 0.95) : 0.8
+    }
+
+    private static func storeCropShare(cropMS: Int, totalMS: Int) {
+        guard cropMS > 0, totalMS > 0 else { return }
+        let share = min(max(Double(cropMS) / Double(totalMS), 0.05), 0.95)
+        UserDefaults.standard.set(share, forKey: cropShareKey)
+    }
+
     // MARK: - Scan
 
     func scan() {
@@ -292,6 +339,9 @@ final class DuplicateScanner: ObservableObject {
         let snapshot = fingerprints
         let level = self.level
         let rejected = rejections.memberSets
+        let key = Self.computeCropCacheKey(snapshot, rejected: rejected)
+        let reusableCrop = (key == cropCacheKey) ? cropCache : nil
+        let cropTimeShare = Self.storedCropShare()
         // Changing the sensitivity re-groups too, and swapping the results for
         // a full screen spinner every time the slider is let go takes the
         // slider itself off screen. From .ready the list stays put and a thin
@@ -319,6 +369,8 @@ final class DuplicateScanner: ObservableObject {
             let result = DuplicateGrouper.group(snapshot,
                                                 level: level,
                                                 rejected: rejected,
+                                                cropCache: reusableCrop,
+                                                cropTimeShare: cropTimeShare,
                                                 progress: progress)
             let elapsed = PhotoScanFormat.milliseconds(since: started)
             Task { @MainActor [weak self] in
@@ -326,6 +378,9 @@ final class DuplicateScanner: ObservableObject {
                            cropMS: result.cropMS,
                            cropCandidatePairs: result.cropCandidatePairs,
                            largestWidthBucket: result.largestWidthBucket,
+                           cropReused: result.cropReused,
+                           newCropCache: result.cropCache,
+                           newCropCacheKey: key,
                            note: note)
             }
         }
@@ -541,8 +596,13 @@ final class DuplicateScanner: ObservableObject {
     }
 
     private func apply(_ result: [DuplicateGroup], token: Int, milliseconds: Int,
-                       cropMS: Int, cropCandidatePairs: Int, largestWidthBucket: Int, note: String) {
+                       cropMS: Int, cropCandidatePairs: Int, largestWidthBucket: Int,
+                       cropReused: Bool, newCropCache: DuplicateGrouper.CropCache?,
+                       newCropCacheKey: CropCacheKey, note: String) {
         guard token == groupToken else { return }
+        cropCache = newCropCache
+        cropCacheKey = newCropCacheKey
+        if !cropReused { Self.storeCropShare(cropMS: cropMS, totalMS: milliseconds) }
         groups = result
         refreshGroupIndex()
         // The list held for the undo came out of the generation before this
@@ -566,7 +626,11 @@ final class DuplicateScanner: ObservableObject {
         let croppedGroups = result.filter { !$0.croppedIdentifiers.isEmpty }.count
         let croppedPhotos = result.reduce(0) { $0 + $1.croppedIdentifiers.count }
         log("照合(\(note)): レベル\(level) ハミング距離\(DuplicateLevel.distance(for: level)) / \(milliseconds)ms / 重複\(identical.count)組\(identicalPhotos)枚 / 類似\(similar.count)組\(similarPhotos)枚 / 最大の組\(largest)枚 / 棄却\(rejectionCount)組")
-        log("トリミング候補: 最大の同一幅グループ\(largestWidthBucket)枚 / 検査した組\(cropCandidatePairs)組 / \(cropMS)ms")
+        if cropReused {
+            log("トリミング候補: 前回の結果を再利用 (最大の同一幅グループ\(largestWidthBucket)枚 / 検査した組\(cropCandidatePairs)組)")
+        } else {
+            log("トリミング候補: 最大の同一幅グループ\(largestWidthBucket)枚 / 検査した組\(cropCandidatePairs)組 / \(cropMS)ms")
+        }
         log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚")
 
         loadDetails()

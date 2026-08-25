@@ -125,7 +125,8 @@ enum DuplicateGrouper {
     struct Result {
         let groups: [DuplicateGroup]
         /// The crop pass now runs on its own, so its own time is all of it --
-        /// gates included, not just the sliding-window step.
+        /// gates included, not just the sliding-window step. 0 when a cached
+        /// result was reused instead of recomputed.
         let cropMS: Int
         /// How many pairs made it past the width bucket and the cheap gates to
         /// the actual sliding-window comparison. The number that says whether
@@ -135,14 +136,36 @@ enum DuplicateGrouper {
         /// The largest group of photos sharing one exact pixel width -- the
         /// number a slow crop pass is almost certainly explained by.
         let largestWidthBucket: Int
+        /// Handed back so the caller can offer it to the next call. nil only
+        /// when there was nothing to group in the first place.
+        let cropCache: CropCache?
+        /// True when `cropCache` was accepted as-is rather than recomputed --
+        /// so a caller logging `cropMS` knows 0 means "skipped", not "instant".
+        let cropReused: Bool
+    }
+
+    /// What one crop pass found, kept in a form cheap enough to replay: the
+    /// index pairs it decided to union, not the profiles that led there.
+    /// Crop detection does not depend on `level`, so a caller whose only
+    /// change since the last grouping was the slider can hand this back
+    /// in and skip the pass entirely -- the pairs mean the same thing again
+    /// as long as the snapshot they were computed against has not changed.
+    struct CropCache {
+        let matchedPairs: [(Int, Int)]
+        let cropped: Set<Int>
+        let candidatePairs: Int
+        let largestBucket: Int
     }
 
     static func group(_ prints: [PhotoFingerprint],
                       level: Int,
                       rejected: [Set<String>],
+                      cropCache: CropCache? = nil,
+                      cropTimeShare: Double = 0.8,
                       progress: (@Sendable (Double) -> Void)? = nil) -> Result {
         guard prints.count > 1 else {
-            return Result(groups: [], cropMS: 0, cropCandidatePairs: 0, largestWidthBucket: 0)
+            return Result(groups: [], cropMS: 0, cropCandidatePairs: 0, largestWidthBucket: 0,
+                         cropCache: nil, cropReused: false)
         }
         let count = prints.count
 
@@ -208,10 +231,18 @@ enum DuplicateGrouper {
         // way through. Pairs are what actually gets done.
         let totalPairs = count * (count - 1) / 2
 
+        // The crop pass costs far more per pair than this loop does -- a
+        // coarse hash compare here is a XOR and a popcount, while a crop
+        // candidate walks whole profiles -- so a fair split of the gauge
+        // between the two cannot come from comparing pair counts. It comes
+        // from the caller's own memory of how the last real pass on this
+        // library actually split, which is what `cropTimeShare` is.
+        let mainWeight = 1 - min(max(cropTimeShare, 0.05), 0.95)
+
         for i in 0..<count {
             if let progress, i % 256 == 0, totalPairs > 0 {
                 let donePairs = i * (2 * count - i - 1) / 2
-                progress(Double(donePairs) / Double(totalPairs))
+                progress(Double(donePairs) / Double(totalPairs) * mainWeight)
             }
             let hashI = coarse[i]
             let aspectI = aspects[i]
@@ -227,7 +258,7 @@ enum DuplicateGrouper {
                 sets.union(i, j)
             }
         }
-        progress?(1)
+        progress?(mainWeight)
 
         // Crop detection is a separate pass, not fused into the loop above.
         // It used to be, gated per-pair on width alone -- but a real camera
@@ -238,9 +269,28 @@ enum DuplicateGrouper {
         // same-width pairs are ever looked at, which is the same set of pairs
         // the old gate eventually reached anyway -- just found in a sum of
         // small squares instead of one enormous one.
-        let cropOutcome = cropMatches(prints, in: &sets,
+        let cropOutcome: CropOutcome
+        if let cropCache {
+            // level is not one of the inputs a crop pass looks at, so a caller
+            // that only changed the slider since the last grouping already
+            // knows the answer -- replaying the union calls costs nothing
+            // next to redoing the profile comparisons that found them.
+            for (a, b) in cropCache.matchedPairs { sets.union(a, b) }
+            cropOutcome = CropOutcome(cropped: cropCache.cropped, milliseconds: 0,
+                                      candidatePairs: cropCache.candidatePairs,
+                                      largestBucket: cropCache.largestBucket,
+                                      matchedPairs: cropCache.matchedPairs)
+            progress?(1)
+        } else {
+            let cropProgress: (@Sendable (Double) -> Void)? = progress.map { report in
+                { (local: Double) in report(mainWeight + local * (1 - mainWeight)) }
+            }
+            cropOutcome = cropMatches(prints, in: &sets,
                                       rejectedPairs: rejectedPairs,
-                                      hasRejections: hasRejections)
+                                      hasRejections: hasRejections,
+                                      progress: cropProgress)
+            progress?(1)
+        }
         let croppedIndices = cropOutcome.cropped
 
         var buckets: [Int: [Int]] = [:]
@@ -268,12 +318,14 @@ enum DuplicateGrouper {
                                          croppedIdentifiers: cropped))
         }
 
-        // Exact matches first, then the biggest groups: the clearest decisions
-        // come first and the judgement calls come after.
+        // Oldest photo first: the group holding the library's oldest memory
+        // leads, not the group with the most members in it. Ties fall back to
+        // the old rule (biggest group, then id) since a missing date should
+        // not make two otherwise-equal groups swap places for no visible
+        // reason.
         let sorted = groups.sorted { lhs, rhs in
-            if (lhs.kind == .identical) != (rhs.kind == .identical) {
-                return lhs.kind == .identical
-            }
+            let left = oldest(lhs), right = oldest(rhs)
+            if left != right { return left < right }
             if lhs.members.count != rhs.members.count {
                 return lhs.members.count > rhs.members.count
             }
@@ -282,7 +334,18 @@ enum DuplicateGrouper {
         return Result(groups: sorted,
                      cropMS: cropOutcome.milliseconds,
                      cropCandidatePairs: cropOutcome.candidatePairs,
-                     largestWidthBucket: cropOutcome.largestBucket)
+                     largestWidthBucket: cropOutcome.largestBucket,
+                     cropCache: DuplicateGrouper.CropCache(matchedPairs: cropOutcome.matchedPairs,
+                                                           cropped: cropOutcome.cropped,
+                                                           candidatePairs: cropOutcome.candidatePairs,
+                                                           largestBucket: cropOutcome.largestBucket),
+                     cropReused: cropCache != nil)
+    }
+
+    /// The oldest `creationDate` among a group's members, in the same
+    /// nil-sorts-last convention as `timestamp(_:)` below.
+    private static func oldest(_ group: DuplicateGroup) -> TimeInterval {
+        group.members.map(timestamp).min() ?? .greatestFiniteMagnitude
     }
 
     static func kind(of members: [PhotoFingerprint]) -> DuplicateGroup.Kind {
@@ -344,6 +407,9 @@ enum DuplicateGrouper {
         let milliseconds: Int
         let candidatePairs: Int
         let largestBucket: Int
+        /// Every pair actually unioned, so a cache built from this can replay
+        /// the decision without redoing the profile comparison that made it.
+        let matchedPairs: [(Int, Int)]
     }
 
     /// Bucketed by exact pixel width first, so only same-width pairs are ever
@@ -360,23 +426,39 @@ enum DuplicateGrouper {
     private static func cropMatches(_ prints: [PhotoFingerprint],
                                     in sets: inout DisjointSet,
                                     rejectedPairs: Set<Int64>,
-                                    hasRejections: Bool) -> CropOutcome {
+                                    hasRejections: Bool,
+                                    progress: (@Sendable (Double) -> Void)? = nil) -> CropOutcome {
         let started = CFAbsoluteTimeGetCurrent()
         var widthBuckets: [Int: [Int]] = [:]
         for (index, print) in prints.enumerated() where print.width > 0 {
             widthBuckets[print.width, default: []].append(index)
         }
 
-        var cropped = Set<Int>()
-        var candidatePairs = 0
+        // Known before a single pair is looked at, from bucket sizes alone --
+        // so progress through this pass can be reported from the start
+        // instead of only once it is already most of the way done.
+        var totalVisits = 0
         var largestBucket = 0
+        for (_, indices) in widthBuckets where indices.count > 1 {
+            let n = indices.count
+            totalVisits += n * (n - 1) / 2
+            largestBucket = max(largestBucket, n)
+        }
+
+        var cropped = Set<Int>()
+        var matchedPairs: [(Int, Int)] = []
+        var candidatePairs = 0
+        var visited = 0
 
         for (_, indices) in widthBuckets where indices.count > 1 {
-            largestBucket = max(largestBucket, indices.count)
             for a in 0..<(indices.count - 1) {
                 let i = indices[a]
                 let ha = prints[i].height
                 for b in (a + 1)..<indices.count {
+                    visited += 1
+                    if let progress, visited % 8192 == 0, totalVisits > 0 {
+                        progress(Double(visited) / Double(totalVisits))
+                    }
                     let j = indices[b]
                     let hb = prints[j].height
                     guard ha != hb else { continue }
@@ -398,14 +480,17 @@ enum DuplicateGrouper {
                     guard variance(of: window) >= cropMinVariance else { continue }
 
                     sets.union(i, j)
+                    matchedPairs.append((i, j))
                     cropped.insert(ha > hb ? j : i)
                 }
             }
         }
+        progress?(1)
 
         let elapsed = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
         return CropOutcome(cropped: cropped, milliseconds: elapsed,
-                           candidatePairs: candidatePairs, largestBucket: largestBucket)
+                           candidatePairs: candidatePairs, largestBucket: largestBucket,
+                           matchedPairs: matchedPairs)
     }
 
     private static func meanAbsDifference(_ a: Data, _ b: Data) -> Double {

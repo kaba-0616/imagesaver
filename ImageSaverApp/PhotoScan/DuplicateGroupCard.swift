@@ -11,6 +11,7 @@ struct DuplicateGroupCard: View {
     let group: DuplicateGroup
     let selected: Set<String>
     let details: [String: AssetDetail]
+    let showsCheckboxes: Bool
     let onToggle: (String) -> Void
     let onSelectGroup: () -> Void
     let onDeselectGroup: () -> Void
@@ -140,7 +141,9 @@ struct DuplicateGroupCard: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen(index) }
                 // Added last so it sits above the tap target below it.
-                .overlay(alignment: .topTrailing) { checkButton(identifier, chosen: chosen) }
+                .overlay(alignment: .topTrailing) {
+                    if showsCheckboxes { checkButton(identifier, chosen: chosen) }
+                }
             caption(member)
         }
         .frame(width: side)
