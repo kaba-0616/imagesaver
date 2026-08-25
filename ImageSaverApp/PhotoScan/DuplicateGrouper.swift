@@ -42,9 +42,19 @@ struct DuplicateGroup: Identifiable {
     /// the rest -- which is worth saying out loud, or it reads as the app
     /// having forgotten.
     let hasRejectedPair: Bool
+    /// Members a crop-detection pass matched to a fuller version elsewhere in
+    /// this group. Never empty and never everyone: something in the group is
+    /// always the full frame, or there would be nothing to compare a crop
+    /// against in the first place.
+    let croppedIdentifiers: Set<String>
 
     var suggestedKeep: PhotoFingerprint { members[0] }
     var suggestedDelete: [PhotoFingerprint] { Array(members.dropFirst()) }
+
+    /// Reached only by deleting members out of a live group: a fresh group
+    /// never starts this small. The card stays on screen instead of vanishing,
+    /// so the one photo the user chose to keep stays visible as confirmation.
+    var isCleanedUp: Bool { members.count <= 1 }
 
     /// nil unless every member size is known, so a partial total is never
     /// presented as the whole.
@@ -112,11 +122,19 @@ enum DuplicateGrouper {
     /// for the rejection store from in here would be a data race; the
     /// decisions are handed in by value instead, and turning them into index
     /// pairs is this function own job because the indices belong to it.
+    struct Result {
+        let groups: [DuplicateGroup]
+        /// Time actually spent in the sliding-window crop verification, not
+        /// the cheap gates ahead of it -- those are folded into the loop's own
+        /// reported time, same as everything else in it.
+        let cropVerifyMS: Int
+    }
+
     static func group(_ prints: [PhotoFingerprint],
                       level: Int,
                       rejected: [Set<String>],
-                      progress: (@Sendable (Double) -> Void)? = nil) -> [DuplicateGroup] {
-        guard prints.count > 1 else { return [] }
+                      progress: (@Sendable (Double) -> Void)? = nil) -> Result {
+        guard prints.count > 1 else { return Result(groups: [], cropVerifyMS: 0) }
         let count = prints.count
 
         var indexByID: [String: Int] = [:]
@@ -175,11 +193,24 @@ enum DuplicateGrouper {
         // reaching through a struct for each field is most of the cost.
         let coarse = prints.map(\.coarse)
         let aspects = prints.map(\.aspect)
+        let widths = prints.map(\.width)
+        let heights = prints.map(\.height)
+        let colProfiles = prints.map(\.colProfile)
+        let rowProfiles = prints.map(\.rowProfile)
         let threshold = DuplicateLevel.distance(for: level)
         let hasRejections = !rejectedPairs.isEmpty
         // The work is a triangle, so i/n would claim half done a quarter of the
         // way through. Pairs are what actually gets done.
         let totalPairs = count * (count - 1) / 2
+
+        // Every pair the ordinary pass above rejects also gets a look here --
+        // top/bottom cropped, its aspect ratio has moved too far for the gate
+        // above to ever consider it the same picture. Filtered by two integer
+        // comparisons before anything resembling real work runs, because this
+        // branch is reached for the overwhelming majority of the same 1.66e10
+        // pairs a 180,000-photo library produces.
+        var croppedIndices = Set<Int>()
+        var cropVerifyMS: Double = 0
 
         for i in 0..<count {
             if let progress, i % 256 == 0, totalPairs > 0 {
@@ -189,15 +220,49 @@ enum DuplicateGrouper {
             let hashI = coarse[i]
             let aspectI = aspects[i]
             for j in (i + 1)..<count {
-                if (hashI ^ coarse[j]).nonzeroBitCount > threshold { continue }
-                // A portrait and a landscape squashed onto the same grid can
-                // score alike without looking alike. Written as a positive test
-                // so a NaN -- either side missing its pixel size -- fails it
-                // rather than slipping through two negative ones.
-                let ratio = aspectI / aspects[j]
-                if !(ratio >= 0.88 && ratio <= 1.14) { continue }
+                if (hashI ^ coarse[j]).nonzeroBitCount <= threshold {
+                    // A portrait and a landscape squashed onto the same grid can
+                    // score alike without looking alike. Written as a positive
+                    // test so a NaN -- either side missing its pixel size --
+                    // fails it rather than slipping through two negative ones.
+                    let ratio = aspectI / aspects[j]
+                    if ratio >= 0.88 && ratio <= 1.14 {
+                        if !(hasRejections && rejectedPairs.contains(pairKey(i, j))) {
+                            sets.union(i, j)
+                        }
+                        continue
+                    }
+                }
+
+                // Cheap crop gate: same real width (a vertical-only crop keeps
+                // it), meaningfully different height, before touching either
+                // profile.
+                let wa = widths[i], wb = widths[j]
+                guard wa > 0, wb > 0,
+                      abs(wa - wb) * 50 <= max(wa, wb) else { continue }
+                let ha = heights[i], hb = heights[j]
+                guard ha != hb else { continue }
+                let shorter = min(ha, hb), taller = max(ha, hb)
+                guard Double(shorter) <= Double(taller) * (1 - cropMinHeightDrop) else { continue }
+                guard let colA = colProfiles[i], let colB = colProfiles[j],
+                      meanAbsDifference(colA, colB) <= cropColumnGate else { continue }
+                guard let rowA = rowProfiles[ha > hb ? i : j],
+                      let rowB = rowProfiles[ha > hb ? j : i] else { continue }
                 if hasRejections && rejectedPairs.contains(pairKey(i, j)) { continue }
+
+                let verifyStarted = CFAbsoluteTimeGetCurrent()
+                let match = bestCropOffset(full: rowA, crop: rowB)
+                cropVerifyMS += (CFAbsoluteTimeGetCurrent() - verifyStarted) * 1000
+
+                guard let match, match.score >= cropRowMatch else { continue }
+                // subdata(in:) indexes from rowA's own startIndex, not
+                // necessarily 0 -- offset is a count from the front either way.
+                let base = rowA.startIndex + match.offset
+                let window = rowA.subdata(in: base..<(base + rowB.count))
+                guard variance(of: window) >= cropMinVariance else { continue }
+
                 sets.union(i, j)
+                croppedIndices.insert(ha > hb ? j : i)
             }
         }
         progress?(1)
@@ -216,15 +281,20 @@ enum DuplicateGrouper {
             let kind = self.kind(of: members)
             let flagged = hasRejections
                 && containsRejectedPair(indices, in: rejectedPairs, touching: rejectedIndices)
+            var cropped: Set<String> = []
+            for index in indices where croppedIndices.contains(index) {
+                cropped.insert(prints[index].localIdentifier)
+            }
             groups.append(DuplicateGroup(id: root,
                                          kind: kind,
-                                         members: order(members),
-                                         hasRejectedPair: flagged))
+                                         members: order(members, croppedIdentifiers: cropped),
+                                         hasRejectedPair: flagged,
+                                         croppedIdentifiers: cropped))
         }
 
         // Exact matches first, then the biggest groups: the clearest decisions
         // come first and the judgement calls come after.
-        return groups.sorted { lhs, rhs in
+        let sorted = groups.sorted { lhs, rhs in
             if (lhs.kind == .identical) != (rhs.kind == .identical) {
                 return lhs.kind == .identical
             }
@@ -233,6 +303,7 @@ enum DuplicateGrouper {
             }
             return lhs.id < rhs.id
         }
+        return Result(groups: sorted, cropVerifyMS: Int(cropVerifyMS.rounded()))
     }
 
     static func kind(of members: [PhotoFingerprint]) -> DuplicateGroup.Kind {
@@ -245,8 +316,20 @@ enum DuplicateGrouper {
     /// file, then the oldest. Exposed so the list can be put back in order
     /// once the file sizes arrive, rather than have the order shift silently
     /// under the user one tile at a time.
-    static func order(_ members: [PhotoFingerprint]) -> [PhotoFingerprint] {
-        members.sorted(by: sizesKnown(members) ? bestFirstWithSize : bestFirstWithoutSize)
+    ///
+    /// A photo a crop-detection pass matched to a fuller version always sorts
+    /// after every uncropped member, pixel count and file size notwithstanding
+    /// -- a bigger file that is missing the top of the picture is still
+    /// missing the top of the picture.
+    static func order(_ members: [PhotoFingerprint], croppedIdentifiers: Set<String> = []) -> [PhotoFingerprint] {
+        let bySize = sizesKnown(members) ? bestFirstWithSize : bestFirstWithoutSize
+        guard !croppedIdentifiers.isEmpty else { return members.sorted(by: bySize) }
+        return members.sorted { lhs, rhs in
+            let lhsCropped = croppedIdentifiers.contains(lhs.localIdentifier)
+            let rhsCropped = croppedIdentifiers.contains(rhs.localIdentifier)
+            if lhsCropped != rhsCropped { return !lhsCropped }
+            return bySize(lhs, rhs)
+        }
     }
 
     /// All or nothing: mixing "by size" and "without size" inside one group is
@@ -255,6 +338,63 @@ enum DuplicateGrouper {
     /// say which of the two orderings was actually used.
     static func sizesKnown(_ members: [PhotoFingerprint]) -> Bool {
         members.allSatisfy { ($0.byteCount ?? 0) > 0 }
+    }
+
+    // MARK: - Crop detection
+
+    /// A vertical-only crop keeps the original width; anything further off is
+    /// almost certainly two different photos that happen to be a similar size.
+    private static let cropMinHeightDrop = 0.05
+    /// Mean absolute difference between two 32-sample column profiles
+    /// (0...255 per sample) below which a pair is worth the sliding-window
+    /// check. Wide open on purpose for a first cut -- tighten once real
+    /// matches and misses have been logged and looked at on a real library.
+    private static let cropColumnGate: Double = 18
+    /// How well the shorter photo's row profile has to fit somewhere inside
+    /// the taller one's, 0 (nothing alike) to 1 (identical). Same caveat.
+    private static let cropRowMatch: Double = 0.9
+    /// Below this, a stretch of the image is close enough to a flat colour
+    /// that almost anything would "fit" it -- sky, a wall, a stage
+    /// background. Refusing to call a crop against a window this uniform is
+    /// what keeps that from costing someone the full-frame photo instead of
+    /// the cut one.
+    private static let cropMinVariance: Double = 120
+
+    private static func meanAbsDifference(_ a: Data, _ b: Data) -> Double {
+        guard a.count == b.count, !a.isEmpty else { return .infinity }
+        var total = 0
+        for index in 0..<a.count {
+            total += abs(Int(a[a.startIndex + index]) - Int(b[b.startIndex + index]))
+        }
+        return Double(total) / Double(a.count)
+    }
+
+    /// Slides `crop`'s profile along `full`'s looking for the best fit.
+    /// `full` must not be shorter than `crop`, which the caller already knows
+    /// from having picked the taller photo as `full`.
+    private static func bestCropOffset(full: Data, crop: Data) -> (offset: Int, score: Double)? {
+        guard crop.count <= full.count, !crop.isEmpty else { return nil }
+        let fullBytes = [UInt8](full)
+        let cropBytes = [UInt8](crop)
+        let span = fullBytes.count - cropBytes.count
+        var best: (offset: Int, score: Double)?
+        for offset in 0...span {
+            var total = 0
+            for k in 0..<cropBytes.count {
+                total += abs(Int(fullBytes[offset + k]) - Int(cropBytes[k]))
+            }
+            let score = 1 - (Double(total) / Double(cropBytes.count) / 255)
+            if best == nil || score > best!.score { best = (offset, score) }
+        }
+        return best
+    }
+
+    private static func variance(of data: Data) -> Double {
+        guard !data.isEmpty else { return 0 }
+        let values = data.map { Double($0) }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let squared = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) }
+        return squared / Double(values.count)
     }
 
     // MARK: - Linking

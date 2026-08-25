@@ -23,6 +23,11 @@ struct PhotoFingerprint: Codable, Equatable {
     /// would fail to decode every cache file written before it existed, and
     /// the user would be made to scan the whole library again.
     var byteCount: Int64?
+    /// Brightness profiles for crop detection. See `ImageHash.cropProfiles`.
+    /// Optional for the same reason as `byteCount`: a photo without one is
+    /// simply left out of crop matching rather than forcing a rescan.
+    let colProfile: Data?
+    let rowProfile: Data?
 
     init(localIdentifier: String,
          coarse: UInt64,
@@ -34,7 +39,9 @@ struct PhotoFingerprint: Codable, Equatable {
          burstIdentifier: String?,
          isFavorite: Bool,
          isScreenshot: Bool,
-         byteCount: Int64? = nil) {
+         byteCount: Int64? = nil,
+         colProfile: Data? = nil,
+         rowProfile: Data? = nil) {
         self.localIdentifier = localIdentifier
         self.coarse = coarse
         self.fine = fine
@@ -46,6 +53,8 @@ struct PhotoFingerprint: Codable, Equatable {
         self.isFavorite = isFavorite
         self.isScreenshot = isScreenshot
         self.byteCount = byteCount
+        self.colProfile = colProfile
+        self.rowProfile = rowProfile
     }
 
     /// Compared before two photos are called similar. A portrait and a
@@ -63,15 +72,34 @@ struct PhotoFingerprint: Codable, Equatable {
 /// not re-read every thumbnail in the library.
 enum FingerprintCache {
 
+    /// Bump when a field is added that old cache entries cannot fill in on
+    /// their own (an edit re-triggers `isFresh` and recomputes one photo, but
+    /// nothing ever re-touches an unmodified one). Crop detection's row/column
+    /// profiles are exactly that: without this, every photo scanned before the
+    /// upgrade would sit at `colProfile == nil` forever.
+    private static let currentVersion = 2
+    private static let versionKey = "photoScanCacheVersion"
+
     private static var fileURL: URL? { PhotoScanStore.url("fingerprints.json") }
 
-    static func load() -> [String: PhotoFingerprint] {
-        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return [:] }
+    /// `invalidated` is true exactly once per device, the first load after an
+    /// upgrade that changed the cache format. The caller logs it -- a silent
+    /// full rescan reads as the app having gotten slower for no reason.
+    static func load() -> (prints: [String: PhotoFingerprint], invalidated: Bool) {
+        let stored = UserDefaults.standard.object(forKey: versionKey) as? Int
+        guard stored == currentVersion else {
+            UserDefaults.standard.set(currentVersion, forKey: versionKey)
+            // Never true on a fresh install (stored == nil, but so is the
+            // file): only when a real, populated cache is being thrown away.
+            let hadCache = fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            return ([:], hadCache)
+        }
+        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return ([:], false) }
         let list = (try? JSONDecoder().decode([PhotoFingerprint].self, from: data)) ?? []
         var byID: [String: PhotoFingerprint] = [:]
         byID.reserveCapacity(list.count)
         for print in list { byID[print.localIdentifier] = print }
-        return byID
+        return (byID, false)
     }
 
     /// Losing this file costs a re-scan and nothing else, which is why the

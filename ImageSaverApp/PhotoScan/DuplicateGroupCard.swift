@@ -25,8 +25,9 @@ struct DuplicateGroupCard: View {
         VStack(alignment: .leading, spacing: 8) {
             header
             if group.hasRejectedPair { rejectedBadge }
+            if !group.croppedIdentifiers.isEmpty { croppedBadge }
             strip
-            actions
+            if !group.isCleanedUp { actions }
         }
         .padding(12)
         .background(Color(.secondarySystemBackground))
@@ -37,13 +38,20 @@ struct DuplicateGroupCard: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(group.kind.label)
-                .font(.subheadline.weight(.semibold))
+            if group.isCleanedUp {
+                Text("クリーンアップ完了")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.green)
+            } else {
+                Text(group.kind.label)
+                    .font(.subheadline.weight(.semibold))
+            }
             Text(subtitle)
                 .font(.caption)
                 .foregroundColor(.secondary)
             Spacer(minLength: 8)
-            rejectButton
+            // Nothing left to compare against once only one photo remains.
+            if !group.isCleanedUp { rejectButton }
         }
     }
 
@@ -70,6 +78,14 @@ struct DuplicateGroupCard: View {
         Label("以前「違う」とした写真が含まれます", systemImage: "clock.arrow.circlepath")
             .font(.caption2)
             .foregroundColor(.orange)
+    }
+
+    /// Minimal on purpose: which tile is the trimmed one is already visible
+    /// from the "残す候補" caption in the strip below. This just says why.
+    private var croppedBadge: some View {
+        Label("上下がトリミングされた写真を検知", systemImage: "crop")
+            .font(.caption2)
+            .foregroundColor(.blue)
     }
 
     private var actions: some View {

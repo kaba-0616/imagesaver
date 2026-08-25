@@ -19,6 +19,9 @@ private struct ScanOutcome {
     /// Reported rather than left silent: the next scan being slow for no
     /// apparent reason is exactly the kind of thing nobody can explain later.
     let cacheSkipped: Bool
+    /// See `FingerprintCache.load`: true only on the one load where the
+    /// cache format changed and the whole thing had to be thrown away.
+    let cacheInvalidated: Bool
 }
 
 @MainActor
@@ -283,7 +286,8 @@ final class DuplicateScanner: ObservableObject {
                                                 progress: progress)
             let elapsed = PhotoScanFormat.milliseconds(since: started)
             Task { @MainActor [weak self] in
-                self?.apply(result, token: token, milliseconds: elapsed, note: note)
+                self?.apply(result.groups, token: token, milliseconds: elapsed,
+                           cropVerifyMS: result.cropVerifyMS, note: note)
             }
         }
     }
@@ -477,6 +481,9 @@ final class DuplicateScanner: ObservableObject {
         if outcome.cacheSkipped {
             log("[!] 指紋の保存を見送った: 権限が「選択した写真のみ」のため、見えている\(outcome.total)枚で全体を上書きしない (次回は再計算になる)")
         }
+        if outcome.cacheInvalidated {
+            log("[!] キャッシュ形式が変わったため全件を再計算した")
+        }
         PhotoScanLog.shared.flush()
         // Out of .scanning before the re-group, which refuses to run while a
         // scan is in flight. Both happen in one turn, so nothing is drawn in
@@ -494,7 +501,7 @@ final class DuplicateScanner: ObservableObject {
         }
     }
 
-    private func apply(_ result: [DuplicateGroup], token: Int, milliseconds: Int, note: String) {
+    private func apply(_ result: [DuplicateGroup], token: Int, milliseconds: Int, cropVerifyMS: Int, note: String) {
         guard token == groupToken else { return }
         groups = result
         refreshGroupIndex()
@@ -516,7 +523,10 @@ final class DuplicateScanner: ObservableObject {
             + " / 重複 \(identical.count)組 \(identicalPhotos)枚"
             + " / 類似 \(similar.count)組 \(similarPhotos)枚"
         reportMissingSizes(in: result, pending: true)
+        let croppedGroups = result.filter { !$0.croppedIdentifiers.isEmpty }.count
+        let croppedPhotos = result.reduce(0) { $0 + $1.croppedIdentifiers.count }
         log("照合(\(note)): レベル\(level) ハミング距離\(DuplicateLevel.distance(for: level)) / \(milliseconds)ms / 重複\(identical.count)組\(identicalPhotos)枚 / 類似\(similar.count)組\(similarPhotos)枚 / 最大の組\(largest)枚 / 棄却\(rejectionCount)組")
+        log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚 / 検証\(cropVerifyMS)ms")
 
         loadDetails()
     }
@@ -546,14 +556,16 @@ final class DuplicateScanner: ObservableObject {
                 kept.append(group)
                 continue
             }
-            guard members.count > 1 else {
+            guard members.count > 0 else {
                 emptied += 1
                 continue
             }
+            let stillHere = Set(members.map(\.localIdentifier))
             kept.append(DuplicateGroup(id: group.id,
                                        kind: group.kind,
                                        members: members,
-                                       hasRejectedPair: group.hasRejectedPair))
+                                       hasRejectedPair: group.hasRejectedPair,
+                                       croppedIdentifiers: group.croppedIdentifiers.intersection(stillHere)))
         }
         groups = kept
         refreshGroupIndex()
@@ -561,7 +573,7 @@ final class DuplicateScanner: ObservableObject {
         let identical = kept.filter { $0.kind == .identical }.count
         let similar = kept.filter { $0.kind == .similar }.count
         log("削除後の整理: \(Int(Date().timeIntervalSince(started) * 1000))ms"
-            + " / 1枚だけになり消えた組 \(emptied)組"
+            + " / 0枚になり消えた組 \(emptied)組"
             + " / 重複\(identical)組 / 類似\(similar)組")
     }
 
@@ -664,7 +676,7 @@ final class DuplicateScanner: ObservableObject {
                 held += 1
                 members = updated
             } else {
-                members = DuplicateGrouper.order(updated)
+                members = DuplicateGrouper.order(updated, croppedIdentifiers: group.croppedIdentifiers)
                 if members.first?.localIdentifier != updated.first?.localIdentifier {
                     reordered += 1
                 }
@@ -672,7 +684,8 @@ final class DuplicateScanner: ObservableObject {
             return DuplicateGroup(id: group.id,
                                   kind: group.kind,
                                   members: members,
-                                  hasRejectedPair: group.hasRejectedPair)
+                                  hasRejectedPair: group.hasRejectedPair,
+                                  croppedIdentifiers: group.croppedIdentifiers)
         }
         refreshGroupIndex()
         reportMissingSizes(in: groups, pending: false)
@@ -743,7 +756,8 @@ final class DuplicateScanner: ObservableObject {
         let assets = PHAsset.fetchAssets(with: .image, options: options)
         let total = assets.count
 
-        var cache = FingerprintCache.load()
+        let loaded = FingerprintCache.load()
+        var cache = loaded.prints
 
         // A first pass that decodes nothing: it only asks the cache whether it
         // already has each photo. That turns "how much of this is new" from a
@@ -855,7 +869,8 @@ final class DuplicateScanner: ObservableObject {
                              missing: missing,
                              milliseconds: PhotoScanFormat.milliseconds(since: started),
                              memoryMB: Footprint.megabytes,
-                             cacheSkipped: limited))
+                             cacheSkipped: limited,
+                             cacheInvalidated: loaded.invalidated))
     }
 
     private nonisolated static func fingerprint(
@@ -886,6 +901,13 @@ final class DuplicateScanner: ObservableObject {
               let coarse = ImageHash.coarse(of: thumbnail),
               let fine = ImageHash.fine(of: thumbnail) else { return nil }
 
+        // Real pixel dimensions, not the thumbnail's: aspectFit scales the
+        // callback image to fit inside `target`, so only the asset's own
+        // width/height describe the physical scale the row profile needs.
+        let profiles = ImageHash.cropProfiles(of: thumbnail,
+                                              realWidth: asset.pixelWidth,
+                                              realHeight: asset.pixelHeight)
+
         return PhotoFingerprint(
             localIdentifier: asset.localIdentifier,
             coarse: coarse,
@@ -896,7 +918,9 @@ final class DuplicateScanner: ObservableObject {
             modificationDate: asset.modificationDate,
             burstIdentifier: asset.burstIdentifier,
             isFavorite: asset.isFavorite,
-            isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot)
+            isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot),
+            colProfile: profiles?.columns,
+            rowProfile: profiles?.rows
         )
     }
 }

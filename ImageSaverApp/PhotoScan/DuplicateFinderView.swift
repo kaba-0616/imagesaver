@@ -39,6 +39,19 @@ struct DuplicateFinderView: View {
             .sheet(isPresented: $showingLog) {
                 PhotoScanLogSheet(log: PhotoScanLog.shared) { showingLog = false }
             }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    // Deletion no longer re-groups on its own, so this is the
+                    // one way back to a fresh pass once the user is ready for
+                    // one -- on their schedule, not after every single delete.
+                    Button {
+                        scanner.regroup(note: "手動再照合")
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(scanner.phase != .ready)
+                }
+            }
             .fullScreenCover(item: $preview) { target in
                 DuplicatePreviewView(scanner: scanner,
                                      members: target.members,
