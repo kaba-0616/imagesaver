@@ -53,7 +53,12 @@ struct DuplicateFinderView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(scanner.phase != .ready)
+                    // phase stays .ready for the whole of a regroup started
+                    // from the results screen -- only `regrouping` moves --
+                    // so phase alone lets this get pressed again mid-pass and
+                    // queue a second full grouping behind the first on the
+                    // same serial queue.
+                    .disabled(scanner.phase != .ready || scanner.regrouping != nil)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showsCheckboxes.toggle() } label: {
@@ -374,6 +379,10 @@ struct DuplicateFinderView: View {
                        guard !editing else { return }
                        scanner.commitLevel(levelValue)
                    })
+                   // Same reason as the reload button: a regroup already in
+                   // flight must finish (or be superseded cleanly) before
+                   // another one is queued behind it on the serial queue.
+                   .disabled(scanner.regrouping != nil)
             HStack(spacing: 8) {
                 Text("ゆるい")
                     .font(.caption2)

@@ -21,6 +21,11 @@ struct DuplicateGroupCard: View {
     /// Wider than build 69's 88pt: the date and the file size are the two
     /// things that say which copy is the original, and neither fits on 88.
     private let side: CGFloat = 110
+    /// Past this many members, a card would otherwise grow to thousands of
+    /// points tall and bury every card after it -- collapsed to a handful of
+    /// rows until asked to show the rest.
+    private let collapsedLimit = 24
+    @State private var showingAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -112,17 +117,34 @@ struct DuplicateGroupCard: View {
 
     // MARK: - Tiles
 
+    /// A burst can be a handful of frames or, at the extreme end, hundreds --
+    /// a horizontal scroll hid where one row ended and the next began, and a
+    /// row that wraps reads as what it is: one group, several photos.
     private var strip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            // Tops, not centres. Only the kept tile carries a second
-            // caption line, and centring lifted it above its neighbours.
-            LazyHStack(alignment: .top, spacing: 8) {
-                ForEach(Array(group.members.enumerated()), id: \.element.localIdentifier) { index, member in
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: side), spacing: 8)],
+                     alignment: .leading, spacing: 8) {
+                ForEach(visibleIndexedMembers, id: \.member.localIdentifier) { index, member in
                     tile(member, at: index)
                 }
             }
+            if group.members.count > collapsedLimit {
+                Button(showingAll ? "折りたたむ" : "あと\(group.members.count - collapsedLimit)枚を表示") {
+                    showingAll.toggle()
+                }
+                .font(.caption)
+            }
         }
-        .frame(height: side + 32)
+    }
+
+    private var indexedMembers: [(index: Int, member: PhotoFingerprint)] {
+        Array(group.members.enumerated()).map { ($0.offset, $0.element) }
+    }
+
+    private var visibleIndexedMembers: [(index: Int, member: PhotoFingerprint)] {
+        let all = indexedMembers
+        guard !showingAll, all.count > collapsedLimit else { return all }
+        return Array(all.prefix(collapsedLimit))
     }
 
     private func tile(_ member: PhotoFingerprint, at index: Int) -> some View {

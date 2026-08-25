@@ -352,6 +352,11 @@ final class DuplicateScanner: ObservableObject {
             regrouping = nil
             phase = .grouping(fraction: 0, remaining: nil)
         }
+        // A completed regroup logs itself in `apply()`, but until now a
+        // started one did not -- so one that never finished (superseded, or
+        // the app backgrounded mid-pass) left only silence where the log
+        // should explain the gap.
+        log("照合(\(note))を開始: \(snapshot.count)枚")
 
         Self.queue.async {
             let started = CFAbsoluteTimeGetCurrent()
