@@ -1182,7 +1182,8 @@ final class DuplicateScanner: ObservableObject {
 
         guard let thumbnail = box.take(),
               let coarse = ImageHash.coarse(of: thumbnail),
-              let fine = ImageHash.fine(of: thumbnail) else { return nil }
+              let fine = ImageHash.fine(of: thumbnail),
+              let colorHistogram = ImageHash.colorHistogram(of: thumbnail) else { return nil }
 
         // Real pixel dimensions, not the thumbnail's: aspectFit scales the
         // callback image to fit inside `target`, so only the asset's own
@@ -1195,6 +1196,7 @@ final class DuplicateScanner: ObservableObject {
             localIdentifier: asset.localIdentifier,
             coarse: coarse,
             fine: fine,
+            colorHistogram: colorHistogram,
             width: asset.pixelWidth,
             height: asset.pixelHeight,
             creationDate: asset.creationDate,

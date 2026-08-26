@@ -8,6 +8,10 @@ struct PhotoFingerprint: Codable, Equatable {
     let localIdentifier: String
     let coarse: UInt64
     let fine: FineHash
+    /// Second-stage filter alongside `coarse`/`fine`: two photos with a
+    /// similar brightness layout but a different colour palette fail this
+    /// even when their hashes agree. See `ImageHash.colorHistogram`.
+    let colorHistogram: Data
     let width: Int
     let height: Int
     let creationDate: Date?
@@ -32,6 +36,7 @@ struct PhotoFingerprint: Codable, Equatable {
     init(localIdentifier: String,
          coarse: UInt64,
          fine: FineHash,
+         colorHistogram: Data,
          width: Int,
          height: Int,
          creationDate: Date?,
@@ -45,6 +50,7 @@ struct PhotoFingerprint: Codable, Equatable {
         self.localIdentifier = localIdentifier
         self.coarse = coarse
         self.fine = fine
+        self.colorHistogram = colorHistogram
         self.width = width
         self.height = height
         self.creationDate = creationDate
@@ -77,7 +83,12 @@ enum FingerprintCache {
     /// nothing ever re-touches an unmodified one). Crop detection's row/column
     /// profiles are exactly that: without this, every photo scanned before the
     /// upgrade would sit at `colProfile == nil` forever.
-    private static let currentVersion = 2
+    ///
+    /// 3: `fine` widened from 256 to 512 bits, and `colorHistogram` added --
+    /// both change what `groupSimilar` compares on, so both ride in on one
+    /// version bump rather than costing a 182,000-photo library two separate
+    /// full rescans.
+    private static let currentVersion = 3
     private static let versionKey = "photoScanCacheVersion"
 
     private static var fileURL: URL? { PhotoScanStore.url("fingerprints.json") }

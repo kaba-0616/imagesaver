@@ -1,17 +1,14 @@
 import UIKit
 
-/// 256 bits of fingerprint, as four words.
+/// 512 bits of fingerprint, as a run of words -- kept as an array rather than
+/// four named fields so the grid can be widened again later (as it already
+/// has been once, from 256 to 512 bits) without reshaping this type a second
+/// time.
 struct FineHash: Hashable, Codable {
-    var a: UInt64
-    var b: UInt64
-    var c: UInt64
-    var d: UInt64
+    var words: [UInt64]
 
     func distance(to other: FineHash) -> Int {
-        (a ^ other.a).nonzeroBitCount
-            + (b ^ other.b).nonzeroBitCount
-            + (c ^ other.c).nonzeroBitCount
-            + (d ^ other.d).nonzeroBitCount
+        zip(words, other.words).reduce(0) { $0 + ($1.0 ^ $1.1).nonzeroBitCount }
     }
 }
 
@@ -32,12 +29,59 @@ enum ImageHash {
         return words[0]
     }
 
-    /// 16×16 comparisons. Two different photographs can land on the same 64
-    /// bits; on 256 they do not, so this is what "the same picture" is decided
-    /// on before anything is offered for deletion.
+    /// 32×16 comparisons (512 bits). Raised from 16×16 (256 bits): a real
+    /// 182,000-photo library still turned up a 33-photo group at hamming
+    /// distance 0 on the 256-bit hash whose members shared no burst id, were
+    /// taken years apart and had unrelated file sizes and resolutions --
+    /// different photographs of a similar scene colliding on the hash by
+    /// chance, not a chaining bug. Doubling the grid roughly squares the
+    /// number of distinct patterns available, which is the direct answer to
+    /// two different pictures landing on the same one.
     static func fine(of image: CGImage) -> FineHash? {
-        guard let words = bits(of: image, width: 17, height: 16), words.count == 4 else { return nil }
-        return FineHash(a: words[0], b: words[1], c: words[2], d: words[3])
+        guard let words = bits(of: image, width: 17, height: 32), words.count == 8 else { return nil }
+        return FineHash(words: words)
+    }
+
+    /// A 16-bin-per-channel RGB histogram from a 32×32 downsample (48 bytes:
+    /// R then G then B), compared with the same `meanAbsDifference` the crop
+    /// pass already uses on its own brightness profiles -- one distance
+    /// function serves both, rather than a second one just for colour.
+    /// Existing to catch what neither hash above can: two photographs with a
+    /// similar brightness layout (same pose against a plain wall, say) but a
+    /// different colour palette, which is exactly the kind of unrelated pair
+    /// the fine-hash widening above is meant to separate.
+    static func colorHistogram(of image: CGImage) -> Data? {
+        let side = 32
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let made: Bool = pixels.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(
+                data: raw.baseAddress,
+                width: side,
+                height: side,
+                bitsPerComponent: 8,
+                bytesPerRow: side * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .low
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard made else { return nil }
+
+        let bins = 16
+        var r = [Int](repeating: 0, count: bins)
+        var g = [Int](repeating: 0, count: bins)
+        var b = [Int](repeating: 0, count: bins)
+        let pixelCount = side * side
+        for index in 0..<pixelCount {
+            let offset = index * 4
+            r[Int(pixels[offset]) >> 4] += 1
+            g[Int(pixels[offset + 1]) >> 4] += 1
+            b[Int(pixels[offset + 2]) >> 4] += 1
+        }
+        func normalized(_ counts: [Int]) -> [UInt8] { counts.map { UInt8(min(255, $0 * 255 / pixelCount)) } }
+        return Data(normalized(r) + normalized(g) + normalized(b))
     }
 
     /// Two brightness profiles for crop detection: `columns` is always 32

@@ -211,14 +211,16 @@ enum DuplicateGrouper {
         // The 64-bit coarse hash is an 8x8 grid -- coarse enough that on a
         // large library, unrelated photos land within a loose threshold of
         // each other by chance (confirmed on device: level 0, threshold 20,
-        // put 182187 of 182300 photos in one group). The 256-bit fine hash is
-        // a 16x16 grid of the same picture and does not collide this way (see
-        // `ImageHash.fine`) -- scaling the threshold by 4 (256/64 bits) keeps
-        // the same relative looseness per level while using the hash that can
-        // actually tell two different photographs apart. A provisional
-        // multiplier pending a real-device retest, same as the crop
-        // thresholds below.
-        let fineThreshold = min(threshold * 4, 256)
+        // put 182187 of 182300 photos in one group). The fine hash (512 bits,
+        // a 32x16 grid -- see `ImageHash.fine`) is meant to be the hash that
+        // can actually tell two different photographs apart, so its threshold
+        // is scaled by 8 (512/64 bits) to keep the same relative looseness
+        // per level. A provisional multiplier pending a real-device retest,
+        // same as the crop thresholds below -- and see `histogramThreshold`
+        // for the gate added after even 256 bits at distance 0 still let a
+        // 33-photo group of unrelated pictures through.
+        let fineThreshold = min(threshold * 8, 512)
+        let histoThreshold = histogramThreshold(for: threshold)
         let hasRejections = !rejectedPairs.isEmpty
         // The work is a triangle, so i/n would claim half done a quarter of the
         // way through. Pairs are what actually gets done.
@@ -236,41 +238,50 @@ enum DuplicateGrouper {
         // (A-B close, B-C close => A, B, C one group) even when A and C do not
         // look alike at all. On a loose enough threshold and a large enough
         // library this snowballs -- at level 0 on a 182k-photo library the
-        // whole library chained into one group of 182187. `anchorIndex[root]`
-        // is the index that first founded the group a root currently stands
-        // for; requiring every new member to also match that anchor (not just
-        // whichever member happened to be compared against it) bounds a
-        // group's spread to the threshold around one photo instead of letting
-        // it drift arbitrarily far one small step at a time. `union(lhs, rhs)`
-        // always keeps `find(lhs)` as the surviving root, so `anchorIndex` at
-        // that root never needs to be rewritten after the union below.
-        var anchorIndex = Array(0..<count)
-
+        // whole library chained into one group of 182187.
+        //
+        // An earlier version of this guard checked each new member against
+        // only the group's first photo (its "anchor"), which stopped that
+        // runaway case but left its own gap: two members could each match the
+        // anchor while not matching each other, and nothing here ever
+        // compared them directly. A real 182,000-photo library found exactly
+        // that gap -- a 33-photo group at fine-hash distance 0, sharing no
+        // burst id, spanning years, with unrelated file sizes -- so the check
+        // below is now a full clique requirement: two groups are only ever
+        // merged once every existing member of one has been checked against
+        // every existing member of the other. `DisjointSet.groupMembers`
+        // makes that list available without an extra scan; the cost lands
+        // once, per merge, as `|groupI| x |groupJ|`, not on every future
+        // lookup the way scanning `parent` for it would.
         for i in 0..<count {
             if let progress, i % 256 == 0, totalPairs > 0 {
                 let donePairs = i * (2 * count - i - 1) / 2
                 progress(Double(donePairs) / Double(totalPairs) * mainWeight)
             }
-            let hashI = coarse[i]
-            let aspectI = aspects[i]
             for j in (i + 1)..<count {
-                if (hashI ^ coarse[j]).nonzeroBitCount > threshold { continue }
-                // A portrait and a landscape squashed onto the same grid can
-                // score alike without looking alike. Written as a positive test
-                // so a NaN -- either side missing its pixel size -- fails it
-                // rather than slipping through two negative ones.
-                let ratio = aspectI / aspects[j]
-                if !(ratio >= 0.88 && ratio <= 1.14) { continue }
-                if prints[i].fine.distance(to: prints[j].fine) > fineThreshold { continue }
+                guard isCandidateMatch(i, j, prints: prints, coarse: coarse, aspects: aspects,
+                                       threshold: threshold, fineThreshold: fineThreshold,
+                                       histogramThreshold: histoThreshold) else { continue }
                 if hasRejections && rejectedPairs.contains(pairKey(i, j)) { continue }
-                let anchor = anchorIndex[sets.find(i)]
-                if (coarse[anchor] ^ coarse[j]).nonzeroBitCount > threshold { continue }
-                // The pairwise fine-hash check above only compares i and j --
-                // exactly the gap that let the coarse hash chain groups together
-                // before the anchor guard existed. Binding the fine hash to the
-                // anchor too closes it: a photo can no longer drift a group's
-                // fine-hash neighbourhood one close-enough hop at a time.
-                if prints[anchor].fine.distance(to: prints[j].fine) > fineThreshold { continue }
+
+                let rootI = sets.find(i), rootJ = sets.find(j)
+                if rootI != rootJ {
+                    let groupI = sets.groupMembers(ofRoot: rootI)
+                    let groupJ = sets.groupMembers(ofRoot: rootJ)
+                    var allMatch = true
+                    outer: for a in groupI {
+                        for b in groupJ {
+                            if a == i && b == j { continue } // already checked above
+                            guard isCandidateMatch(a, b, prints: prints, coarse: coarse, aspects: aspects,
+                                                   threshold: threshold, fineThreshold: fineThreshold,
+                                                   histogramThreshold: histoThreshold) else {
+                                allMatch = false
+                                break outer
+                            }
+                        }
+                    }
+                    guard allMatch else { continue }
+                }
                 sets.union(i, j)
             }
         }
@@ -320,6 +331,42 @@ enum DuplicateGrouper {
                                                            candidatePairs: cropOutcome.candidatePairs,
                                                            largestBucket: cropOutcome.largestBucket),
                      cropReused: cropCache != nil)
+    }
+
+    /// Every gate a pair has to pass to be considered the same picture:
+    /// coarse hash, aspect ratio, fine hash, and colour histogram. Used both
+    /// for a single (i, j) check and, inside the clique guard above, for
+    /// every pair between two candidate groups -- one place to keep all four
+    /// conditions in sync rather than two copies drifting apart.
+    private static func isCandidateMatch(_ i: Int, _ j: Int,
+                                         prints: [PhotoFingerprint],
+                                         coarse: [UInt64],
+                                         aspects: [Double],
+                                         threshold: Int,
+                                         fineThreshold: Int,
+                                         histogramThreshold: Double) -> Bool {
+        guard (coarse[i] ^ coarse[j]).nonzeroBitCount <= threshold else { return false }
+        // A portrait and a landscape squashed onto the same grid can score
+        // alike without looking alike. Written as a positive test so a NaN --
+        // either side missing its pixel size -- fails it rather than slipping
+        // through two negative ones.
+        let ratio = aspects[i] / aspects[j]
+        guard ratio >= 0.88 && ratio <= 1.14 else { return false }
+        guard prints[i].fine.distance(to: prints[j].fine) <= fineThreshold else { return false }
+        guard meanAbsDifference(prints[i].colorHistogram, prints[j].colorHistogram) <= histogramThreshold else { return false }
+        return true
+    }
+
+    /// Mean absolute per-bin difference (0...255) above which two photos'
+    /// colour palettes are different enough that a close coarse/fine hash
+    /// must not be allowed to override it -- the gate added after a real
+    /// device still showed unrelated photographs colliding at fine-hash
+    /// distance 0. Loosely widened with `threshold` for the same reason
+    /// `fineThreshold` is: a looser level should tolerate a somewhat bigger
+    /// colour mismatch, not none at all. A value to retune from a real
+    /// library, same as every other gate in this file.
+    private static func histogramThreshold(for threshold: Int) -> Double {
+        min(6.0 + Double(threshold) * 1.5, 40)
     }
 
     // MARK: - Shared setup
@@ -785,8 +832,18 @@ enum DuplicateGrouper {
 
     private struct DisjointSet {
         private var parent: [Int]
+        /// Every index currently under each root, kept alongside `parent` so
+        /// `groupSimilar`'s clique guard can list a candidate group's members
+        /// without a separate O(n) walk over every index for every pair it
+        /// considers. Only ever appended to on the surviving root, which is
+        /// what keeps the running total cost of every union linear over the
+        /// whole pass rather than quadratic.
+        private var members: [[Int]]
 
-        init(_ count: Int) { parent = Array(0..<count) }
+        init(_ count: Int) {
+            parent = Array(0..<count)
+            members = (0..<count).map { [$0] }
+        }
 
         mutating func find(_ index: Int) -> Int {
             var root = index
@@ -802,7 +859,15 @@ enum DuplicateGrouper {
 
         mutating func union(_ lhs: Int, _ rhs: Int) {
             let a = find(lhs), b = find(rhs)
-            if a != b { parent[b] = a }
+            guard a != b else { return }
+            parent[b] = a
+            members[a].append(contentsOf: members[b])
+            members[b].removeAll()
         }
+
+        /// Only meaningful when `root` is already a root (the result of
+        /// `find`, not a raw index) -- callers that pass anything else get an
+        /// empty or stale list back.
+        func groupMembers(ofRoot root: Int) -> [Int] { members[root] }
     }
 }
