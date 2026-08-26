@@ -27,7 +27,7 @@ struct ContentView: View {
                 // share a page you have shared before, so the duplicates it
                 // creates are its own to clean up.
                 Section {
-                    NavigationLink(destination: DuplicateFinderView()) {
+                    NavigationLink(destination: LazyView(DuplicateFinderView())) {
                         Label("写真の重複を整理", systemImage: "square.on.square.dashed")
                     }
                 } footer: {
@@ -105,6 +105,20 @@ struct ContentView: View {
         default: return .orange
         }
     }
+}
+
+/// `NavigationLink(destination:)` built from a plain view value gets that
+/// view constructed as soon as the row appears in the list -- before it is
+/// ever tapped -- because `NavigationView`/`List` evaluate the destination to
+/// size and diff it. For `DuplicateFinderView` that construction runs
+/// `DuplicateScanner.init()`, which starts a full scan of the whole photo
+/// library. The real tap then builds a second, separate instance and starts
+/// a second scan on top of the first -- this defers construction until the
+/// destination is actually pushed, so only the real navigation creates it.
+private struct LazyView<Content: View>: View {
+    private let build: () -> Content
+    init(_ build: @autoclosure @escaping () -> Content) { self.build = build }
+    var body: Content { build() }
 }
 
 private struct EnableExtensionGuideView: View {

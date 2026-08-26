@@ -157,9 +157,9 @@ enum DuplicateGrouper {
         let largestBucket: Int
     }
 
-    /// Groups sharing an exact fine-hash+dimensions key or a burst id, and
-    /// nothing else -- no hamming threshold, no crop pass. This is what
-    /// `.identical` membership has always actually reduced to (see
+    /// Groups sharing an exact fine-hash+dimensions+byte-size key or a burst
+    /// id, and nothing else -- no hamming threshold, no crop pass. This is
+    /// what `.identical` membership has always actually reduced to (see
     /// `kind(of:)`), so it costs an O(n) pass over the library instead of the
     /// O(n²) comparison `groupSimilar` needs -- independent of `level`
     /// entirely, and fast enough to redo on its own without dragging the
@@ -684,11 +684,19 @@ enum DuplicateGrouper {
         let fine: FineHash
         let width: Int
         let height: Int
+        /// Nil until the size fetch resolves it, so the very first pass right
+        /// after a scan still groups on hash+dimensions alone -- two photos
+        /// both still unknown are treated as a tentative match, the same as
+        /// before this field existed. Once `applyDetails` fills it in for a
+        /// group's members, `groupIdentical` is re-run and a pair that turns
+        /// out to differ in size splits apart under the new key.
+        let byteCount: Int64?
 
         init(_ print: PhotoFingerprint) {
             fine = print.fine
             width = print.width
             height = print.height
+            byteCount = print.byteCount
         }
     }
 

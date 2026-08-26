@@ -886,6 +886,16 @@ final class DuplicateScanner: ObservableObject {
         let unknown = found.values.filter { $0.byteCount == nil }.count
         log("サイズ取得: \(found.count)枚 \(milliseconds)ms / 残す候補が変わった組 \(reordered)組 / 選択済みのため据え置き \(held)組"
             + (unknown > 0 ? " / 不明 \(unknown)枚" : ""))
+
+        // 重複の判定はファイルサイズも同じであることを条件にしているが、走査
+        // 直後はまだサイズが分からず nil 同士としてまとめている。ここでサイズが
+        // 分かった時点で該当する組が対象なら重複タブだけ組み直し、実は大きさが
+        // 違っていた組を分割する。
+        let identicalIdentifiers = Set(groups.lazy.filter { $0.kind == .identical }
+            .flatMap { $0.members.map(\.localIdentifier) })
+        if changed, !identicalIdentifiers.isDisjoint(with: found.keys) {
+            regroup(note: "サイズ判明による重複の絞り込み", kind: .identical)
+        }
     }
 
     /// Ranking is 画素数 -> ファイルサイズ -> 撮影日, and the middle step is
