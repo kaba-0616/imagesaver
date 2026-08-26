@@ -579,6 +579,25 @@ enum DuplicateGrouper {
                     let window = rowA.subdata(in: base..<(base + rowB.count))
                     guard variance(of: window) >= cropMinVariance else { continue }
 
+                    // Chaining guard, the same idea as groupSimilar's own
+                    // anchor check on the hamming-distance loop above: without
+                    // it, a run of successive near-miss crop matches (same
+                    // wall, same framing, different people entirely) merges
+                    // transitively -- each photo only ever had to look like
+                    // its one neighbour in the chain, never like the group as
+                    // a whole. A real 180k-photo library still produced a
+                    // 52-photo group this way even after cropColumnGate,
+                    // cropRowMatch and cropMinVariance were tightened (see
+                    // their doc comments); those gates cut it from 559 to 52,
+                    // they did not close it. Requiring every new member to
+                    // also crop-match whichever photo founded this group --
+                    // not just whichever member happened to be compared
+                    // against it -- bounds a group's spread to one photo's
+                    // neighbourhood, the same fix the hamming loop already
+                    // has.
+                    let anchor = sets.find(i)
+                    if anchor != i, !cropMatch(prints[anchor], prints[j]) { continue }
+
                     sets.union(i, j)
                     matchedPairs.append((i, j))
                     cropped.insert(ha > hb ? j : i)
@@ -591,6 +610,26 @@ enum DuplicateGrouper {
         return CropOutcome(cropped: cropped, milliseconds: elapsed,
                            candidatePairs: candidatePairs, largestBucket: largestBucket,
                            matchedPairs: matchedPairs)
+    }
+
+    /// The same vertical-crop test the main loop above applies to a bucketed
+    /// pair, pulled out so the anchor guard can apply it to a pair that never
+    /// shared a width bucket in the first place -- the anchor and `j` can
+    /// come from different width buckets entirely once the anchor's own group
+    /// already spans more than one.
+    private static func cropMatch(_ a: PhotoFingerprint, _ b: PhotoFingerprint) -> Bool {
+        let ha = a.height, hb = b.height
+        guard ha != hb else { return false }
+        let shorter = min(ha, hb), taller = max(ha, hb)
+        guard Double(shorter) <= Double(taller) * (1 - cropMinHeightDrop) else { return false }
+        guard let colA = a.colProfile, let colB = b.colProfile,
+              meanAbsDifference(colA, colB) <= cropColumnGate else { return false }
+        guard let rowA = (ha > hb ? a : b).rowProfile,
+              let rowB = (ha > hb ? b : a).rowProfile,
+              let match = bestCropOffset(full: rowA, crop: rowB), match.score >= cropRowMatch else { return false }
+        let base = rowA.startIndex + match.offset
+        let window = rowA.subdata(in: base..<(base + rowB.count))
+        return variance(of: window) >= cropMinVariance
     }
 
     private static func meanAbsDifference(_ a: Data, _ b: Data) -> Double {
