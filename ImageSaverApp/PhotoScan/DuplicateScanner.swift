@@ -759,6 +759,34 @@ final class DuplicateScanner: ObservableObject {
             parts.append("バイトサイズ不明\(members.count - byteCounts.count)枚")
         }
         parts.append("解像度種類\(dimensions.count)")
+
+        // How close the actual matching gates came to telling these members
+        // apart -- not just that they collided, but by how little. A group
+        // that will not shrink no matter how strict the level gets needs this
+        // to say whether the gates are barely missing (worth tightening) or
+        // not missing at all (fine hash distance 0, colour diff near 0 --
+        // tightening the same two numbers will not touch it).
+        if members.count >= 2 {
+            var fineDistances: [Int] = []
+            var colorDiffs: [Double] = []
+            fineDistances.reserveCapacity(members.count * (members.count - 1) / 2)
+            colorDiffs.reserveCapacity(fineDistances.capacity)
+            for i in 0..<(members.count - 1) {
+                for j in (i + 1)..<members.count {
+                    fineDistances.append(members[i].fine.distance(to: members[j].fine))
+                    colorDiffs.append(DuplicateGrouper.meanAbsDifference(members[i].colorHistogram, members[j].colorHistogram))
+                }
+            }
+            if let fineMin = fineDistances.min(), let fineMax = fineDistances.max() {
+                let fineAvg = Double(fineDistances.reduce(0, +)) / Double(fineDistances.count)
+                parts.append("精細ハッシュ距離 min\(fineMin) avg\(String(format: "%.1f", fineAvg)) max\(fineMax)")
+            }
+            let finiteColorDiffs = colorDiffs.filter { $0.isFinite }
+            if let colorMin = finiteColorDiffs.min(), let colorMax = finiteColorDiffs.max() {
+                let colorAvg = finiteColorDiffs.reduce(0, +) / Double(finiteColorDiffs.count)
+                parts.append("色差 min\(String(format: "%.1f", colorMin)) avg\(String(format: "%.1f", colorAvg)) max\(String(format: "%.1f", colorMax))")
+            }
+        }
         log("最大の組の内訳: " + parts.joined(separator: " / "))
     }
 

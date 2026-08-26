@@ -51,6 +51,15 @@ struct DuplicateGroup: Identifiable {
     var suggestedKeep: PhotoFingerprint { members[0] }
     var suggestedDelete: [PhotoFingerprint] { Array(members.dropFirst()) }
 
+    /// Oldest first, for the strip and the fullscreen swipe order only.
+    /// Deliberately separate from `members`: that array's position 0 is what
+    /// `suggestedKeep`/`suggestedDelete` and the size-arrival reorder above key
+    /// off, and this must never touch that regardless of what order the tiles
+    /// are shown in.
+    var displayOrder: [PhotoFingerprint] {
+        members.sorted { DuplicateGrouper.timestamp($0) < DuplicateGrouper.timestamp($1) }
+    }
+
     /// Reached only by deleting members out of a live group: a fresh group
     /// never starts this small. The card stays on screen instead of vanishing,
     /// so the one photo the user chose to keep stays visible as confirmation.
@@ -679,7 +688,11 @@ enum DuplicateGrouper {
         return variance(of: window) >= cropMinVariance
     }
 
-    private static func meanAbsDifference(_ a: Data, _ b: Data) -> Double {
+    /// `static` rather than `private`: the largest-group diagnostic log in
+    /// `DuplicateScanner` reuses this exact distance so its numbers describe
+    /// the same colour gap the matching gate above actually checks against,
+    /// instead of a second, silently-drifting implementation.
+    static func meanAbsDifference(_ a: Data, _ b: Data) -> Double {
         guard a.count == b.count, !a.isEmpty else { return .infinity }
         var total = 0
         for index in 0..<a.count {
@@ -806,7 +819,9 @@ enum DuplicateGrouper {
     /// other value: falling through to a different field when one side is nil
     /// can make the comparison intransitive, which sorted(by:) is entitled to
     /// react badly to.
-    private static func timestamp(_ print: PhotoFingerprint) -> TimeInterval {
+    /// `fileprivate` rather than `private`: `DuplicateGroup.displayOrder` above
+    /// needs the same nil-sorts-last convention `oldest(_:)` already uses.
+    fileprivate static func timestamp(_ print: PhotoFingerprint) -> TimeInterval {
         print.creationDate?.timeIntervalSince1970 ?? .greatestFiniteMagnitude
     }
 

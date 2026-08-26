@@ -142,8 +142,11 @@ struct DuplicateGroupCard: View {
         }
     }
 
+    /// Oldest first: the strip and the fullscreen swipe order it feeds into
+    /// are meant to read like a timeline, independent of which photo quality
+    /// ranking picked as 残す候補.
     private var indexedMembers: [(index: Int, member: PhotoFingerprint)] {
-        Array(group.members.enumerated()).map { ($0.offset, $0.element) }
+        Array(group.displayOrder.enumerated()).map { ($0.offset, $0.element) }
     }
 
     private var visibleIndexedMembers: [(index: Int, member: PhotoFingerprint)] {

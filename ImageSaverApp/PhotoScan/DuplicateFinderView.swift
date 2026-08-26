@@ -406,7 +406,7 @@ struct DuplicateFinderView: View {
             onDeselectGroup: { scanner.deselectGroup(group) },
             onReject: { Task { await reject(group) } },
             onOpen: { index in
-                preview = PreviewTarget(id: group.id, members: group.members, index: index)
+                preview = PreviewTarget(id: group.id, members: group.displayOrder, index: index)
             }
         )
     }
