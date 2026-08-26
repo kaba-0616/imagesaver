@@ -211,6 +211,20 @@ enum DuplicateGrouper {
         // library actually split, which is what `cropTimeShare` is.
         let mainWeight = 1 - min(max(cropTimeShare, 0.05), 0.95)
 
+        // Chaining guard: without this, a match is transitive by construction
+        // (A-B close, B-C close => A, B, C one group) even when A and C do not
+        // look alike at all. On a loose enough threshold and a large enough
+        // library this snowballs -- at level 0 on a 182k-photo library the
+        // whole library chained into one group of 182187. `anchorIndex[root]`
+        // is the index that first founded the group a root currently stands
+        // for; requiring every new member to also match that anchor (not just
+        // whichever member happened to be compared against it) bounds a
+        // group's spread to the threshold around one photo instead of letting
+        // it drift arbitrarily far one small step at a time. `union(lhs, rhs)`
+        // always keeps `find(lhs)` as the surviving root, so `anchorIndex` at
+        // that root never needs to be rewritten after the union below.
+        var anchorIndex = Array(0..<count)
+
         for i in 0..<count {
             if let progress, i % 256 == 0, totalPairs > 0 {
                 let donePairs = i * (2 * count - i - 1) / 2
@@ -227,6 +241,8 @@ enum DuplicateGrouper {
                 let ratio = aspectI / aspects[j]
                 if !(ratio >= 0.88 && ratio <= 1.14) { continue }
                 if hasRejections && rejectedPairs.contains(pairKey(i, j)) { continue }
+                let anchor = anchorIndex[sets.find(i)]
+                if (coarse[anchor] ^ coarse[j]).nonzeroBitCount > threshold { continue }
                 sets.union(i, j)
             }
         }
