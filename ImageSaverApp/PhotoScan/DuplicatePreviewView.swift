@@ -22,6 +22,7 @@ struct DuplicatePreviewView: View {
     @State private var index: Int
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
+    @State private var dragOffset: CGFloat = 0
 
     init(scanner: DuplicateScanner,
          members: [PhotoFingerprint],
@@ -37,14 +38,18 @@ struct DuplicatePreviewView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+                .opacity(dismissOpacity)
             pager
+                .offset(y: dragOffset)
             VStack(spacing: 0) {
                 topBar
                 Spacer(minLength: 0)
                 filmstrip
                 bottomBar
             }
+            .opacity(dismissOpacity)
         }
+        .simultaneousGesture(dismissDrag)
         .onAppear { loadCurrent() }
         .onChange(of: index) { _ in
             scale = 1
@@ -54,6 +59,41 @@ struct DuplicatePreviewView: View {
         // The one bitmap this screen holds goes back when it closes. Nothing
         // else in the app keeps a full size image around.
         .onDisappear { loader.cancel() }
+    }
+
+    /// Swipe down to return to the grid, the same gesture the system Photos
+    /// app uses. `simultaneousGesture` rather than `.gesture`: TabView's own
+    /// paging gesture still needs first refusal on anything that could be a
+    /// horizontal page swipe, and the two fighting over the same finger on
+    /// iOS 15 is exactly the conflict the pinch/pan trade-off above exists to
+    /// avoid. Gating on translation direction, not just distance, keeps a
+    /// horizontal page swipe from ever moving this offset at all, so the two
+    /// gestures read as independent instead of contested. Disabled while
+    /// zoomed in, for the same reason panning is: a finger already busy
+    /// positioning a zoomed photo should not also be closing it.
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onChanged { value in
+                guard scale <= 1.01,
+                      abs(value.translation.height) > abs(value.translation.width) else { return }
+                dragOffset = value.translation.height
+            }
+            .onEnded { value in
+                let vertical = abs(value.translation.height) > abs(value.translation.width)
+                if scale <= 1.01, vertical, value.translation.height > 120 {
+                    onClose()
+                } else {
+                    withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
+                }
+            }
+    }
+
+    /// Fades the chrome and the black backdrop out as the photo is dragged
+    /// away, so the gesture reads as "pulling the photo down toward the grid
+    /// behind it" rather than a plain vertical scroll.
+    private var dismissOpacity: Double {
+        guard dragOffset > 0 else { return 1 }
+        return Double(max(0, 1 - dragOffset / 400))
     }
 
     // MARK: - Pages
