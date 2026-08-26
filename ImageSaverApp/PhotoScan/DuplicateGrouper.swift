@@ -255,6 +255,12 @@ enum DuplicateGrouper {
                 if hasRejections && rejectedPairs.contains(pairKey(i, j)) { continue }
                 let anchor = anchorIndex[sets.find(i)]
                 if (coarse[anchor] ^ coarse[j]).nonzeroBitCount > threshold { continue }
+                // The pairwise fine-hash check above only compares i and j --
+                // exactly the gap that let the coarse hash chain groups together
+                // before the anchor guard existed. Binding the fine hash to the
+                // anchor too closes it: a photo can no longer drift a group's
+                // fine-hash neighbourhood one close-enough hop at a time.
+                if prints[anchor].fine.distance(to: prints[j].fine) > fineThreshold { continue }
                 sets.union(i, j)
             }
         }

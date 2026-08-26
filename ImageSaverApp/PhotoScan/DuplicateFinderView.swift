@@ -40,7 +40,17 @@ struct DuplicateFinderView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { levelDisplay = Double(scanner.level) }
             .onChange(of: scanner.level) { value in levelDisplay = Double(value) }
-            .onChange(of: tab) { _ in message = nil }
+            .onChange(of: tab) { newTab in
+                message = nil
+                // Similar is no longer computed automatically after a scan --
+                // it is the expensive pass, and starting it before anyone had
+                // looked at this tab read, on device, as an unprompted
+                // re-scan. This is the one place it gets kicked off instead:
+                // the first time the tab is actually opened.
+                guard newTab == .similar, !scanner.hasSimilarResult,
+                      scanner.phase == .ready, scanner.regrouping == nil else { return }
+                scanner.regroup(note: "類似タブを開いた", kind: .similar)
+            }
             // The log is gathered rather than written line by line, so leaving
             // the screen is one of the points it has to be pushed out at.
             .onDisappear { PhotoScanLog.shared.flush() }

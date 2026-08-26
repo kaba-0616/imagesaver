@@ -70,6 +70,12 @@ final class DuplicateScanner: ObservableObject {
     /// Non-nil only while the results are on screen and being re-grouped.
     @Published private(set) var regrouping: Regrouping?
     @Published private(set) var groups: [DuplicateGroup] = []
+    /// Whether the similar tab has been computed at least once for the
+    /// current `fingerprints`. The similar pass is the expensive one (up to
+    /// 100+ seconds on a large library at a loose level) and is no longer
+    /// started automatically after a scan -- this is what the view checks to
+    /// decide whether opening the similar tab needs to kick it off.
+    private(set) var hasSimilarResult = false
     /// Kept here rather than in the view so that nothing can survive in it
     /// that is no longer on screen. Every path that replaces `groups` prunes
     /// it, which is what stops a photo the user cannot see from being counted
@@ -607,6 +613,9 @@ final class DuplicateScanner: ObservableObject {
 
     private func finishScan(_ outcome: ScanOutcome) {
         fingerprints = outcome.prints
+        // Whatever the similar tab showed was computed from the fingerprints
+        // just replaced -- it no longer describes this library.
+        hasSimilarResult = false
         scanReport = "\(outcome.total)枚を走査 \(outcome.milliseconds)ms"
         if outcome.reused > 0 { scanReport += " (再利用\(outcome.reused)枚)" }
         log("走査完了: 対象\(outcome.total)枚 / 再利用\(outcome.reused)枚 / 新規\(outcome.computed)枚 / \(outcome.milliseconds)ms / メモリ\(outcome.memoryMB)MB")
@@ -624,7 +633,12 @@ final class DuplicateScanner: ObservableObject {
         // scan is in flight. Both happen in one turn, so nothing is drawn in
         // between.
         phase = .grouping(fraction: 0, remaining: nil)
-        regroup(note: "走査後の照合", kind: nil)
+        // Similar is the expensive pass (100+ seconds on a large library at a
+        // loose level) and starting it before the user has even looked at the
+        // similar tab read, on device, as an unprompted re-scan. Duplicate is
+        // cheap and worth showing immediately; similar waits for the tab to
+        // actually be opened (see `DuplicateFinderView`'s tab watcher).
+        regroup(note: "走査後の照合", kind: .identical)
     }
 
     private func updateGrouping(fraction: Double, remaining: TimeInterval?, token: Int) {
@@ -666,6 +680,7 @@ final class DuplicateScanner: ObservableObject {
     private func applySimilar(_ result: DuplicateGrouper.Result, token: Int, milliseconds: Int,
                               newCropCacheKey: CropCacheKey, note: String) {
         guard token == groupToken else { return }
+        hasSimilarResult = true
         cropCache = result.cropCache
         cropCacheKey = newCropCacheKey
         if !result.cropReused { Self.storeCropShare(cropMS: result.cropMS, totalMS: milliseconds) }
