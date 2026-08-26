@@ -198,6 +198,17 @@ enum DuplicateGrouper {
         let coarse = prints.map(\.coarse)
         let aspects = prints.map(\.aspect)
         let threshold = DuplicateLevel.distance(for: level)
+        // The 64-bit coarse hash is an 8x8 grid -- coarse enough that on a
+        // large library, unrelated photos land within a loose threshold of
+        // each other by chance (confirmed on device: level 0, threshold 20,
+        // put 182187 of 182300 photos in one group). The 256-bit fine hash is
+        // a 16x16 grid of the same picture and does not collide this way (see
+        // `ImageHash.fine`) -- scaling the threshold by 4 (256/64 bits) keeps
+        // the same relative looseness per level while using the hash that can
+        // actually tell two different photographs apart. A provisional
+        // multiplier pending a real-device retest, same as the crop
+        // thresholds below.
+        let fineThreshold = min(threshold * 4, 256)
         let hasRejections = !rejectedPairs.isEmpty
         // The work is a triangle, so i/n would claim half done a quarter of the
         // way through. Pairs are what actually gets done.
@@ -240,6 +251,7 @@ enum DuplicateGrouper {
                 // rather than slipping through two negative ones.
                 let ratio = aspectI / aspects[j]
                 if !(ratio >= 0.88 && ratio <= 1.14) { continue }
+                if prints[i].fine.distance(to: prints[j].fine) > fineThreshold { continue }
                 if hasRejections && rejectedPairs.contains(pairKey(i, j)) { continue }
                 let anchor = anchorIndex[sets.find(i)]
                 if (coarse[anchor] ^ coarse[j]).nonzeroBitCount > threshold { continue }
