@@ -320,15 +320,14 @@ final class DuplicateScanner: ObservableObject {
         regroup(note: "レベル変更", kind: .similar)
     }
 
-    #if DEBUG
+    #if IMAGESAVER_DEV_TOOLS
     private var sweepTask: Task<Void, Never>?
     var isSweepRunning: Bool { sweepTask != nil }
 
     /// Reruns the similar pass at every level in turn and leaves the level
     /// back where it started. Development only: dragging the slider eleven
     /// times and waiting after each one to see the whole curve is what this
-    /// replaces, and it is not something a release build's user has any
-    /// reason to trigger.
+    /// replaces.
     func runFullLevelSweep() {
         guard sweepTask == nil else { return }
         let originalLevel = level

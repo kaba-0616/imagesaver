@@ -432,14 +432,7 @@ struct DuplicateFinderView: View {
             }
             Slider(value: $levelDisplay,
                    in: Double(DuplicateLevel.range.lowerBound)...Double(DuplicateLevel.range.upperBound),
-                   step: 1,
-                   onEditingChanged: { editing in
-                       // Only when the thumb is let go. Re-grouping on every
-                       // step would run the whole library comparison ten times
-                       // for one drag.
-                       guard !editing else { return }
-                       scanner.commitLevel(levelValue)
-                   })
+                   step: 1)
                    // Same reason as the reload button: a regroup already in
                    // flight must finish (or be superseded cleanly) before
                    // another one is queued behind it on the serial queue.
@@ -462,7 +455,18 @@ struct DuplicateFinderView: View {
             Text("判定のレベルを変えると、一度「違う」とした組が再び出ることがあります。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
-            #if DEBUG
+            if levelValue != scanner.level {
+                HStack {
+                    Text("表示中の結果はレベル\(scanner.level)のものです")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                    Spacer()
+                    Button("照合") { scanner.commitLevel(levelValue) }
+                        .font(.caption.weight(.semibold))
+                        .disabled(scanner.regrouping != nil)
+                }
+            }
+            #if IMAGESAVER_DEV_TOOLS
             Button {
                 scanner.runFullLevelSweep()
             } label: {

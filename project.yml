@@ -15,6 +15,11 @@ settings:
     # natively, and any embedded dylib inside the .appex is another thing a
     # third-party resigner (Sideloadly) could fail to re-sign correctly.
     ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: NO
+    # The only build this project ever ships is the Release archive built by
+    # CI (there is no separate Debug distribution channel), so gating dev-only
+    # tools behind DEBUG means they never reach the device that needs them.
+    # This flag stays on in every build instead.
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) IMAGESAVER_DEV_TOOLS
 
 packages:
   SwiftDraw:
@@ -51,7 +56,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "81"
+        CURRENT_PROJECT_VERSION: "82"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: ImageSaverAction
@@ -91,7 +96,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2.action
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "81"
+        CURRENT_PROJECT_VERSION: "82"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SKIP_INSTALL: true
     dependencies:
