@@ -74,12 +74,22 @@ struct DuplicateGroup: Identifiable {
 /// 64 bit dHash a bigger distance is the loosest. Passing one straight into the
 /// other inverts the whole feature, so the conversion lives here alone and both
 /// numbers are written into the log.
+///
+/// distance and level move 1-for-1 (0...10 both ways). It used to be 2-for-1,
+/// covering hamming distance up to 20, but distances above 10 never found
+/// real duplicates on a large library -- they just merged unrelated photos
+/// into one enormous group -- so that half of the range was dropped and the
+/// remaining one was given the slider's full 11 steps instead of sharing them.
 enum DuplicateLevel {
 
     static let range = 0...10
-    /// Matches build 69 "標準". Starting at 10 would open the similar tab
-    /// empty, which reads as the feature being broken rather than strict.
-    static let standard = 6
+    // Levels below here (old distance 12-20) were dropped: on a 182k photo
+    // library they collapsed tens of thousands of unrelated photos into one
+    // group instead of finding actual duplicates, and even the tightened
+    // (build79/80) anchor+fine-hash guard only dented that, never fixed it.
+    // The distance-8 default below (old level 6) is worth keeping regardless.
+    static let standard = 2
+    // Matches build 69 "標準" at hamming distance 8.
 
     private static let key = "photoScanLevel"
 
@@ -88,7 +98,7 @@ enum DuplicateLevel {
     }
 
     static func distance(for level: Int) -> Int {
-        (range.upperBound - clamp(level)) * 2
+        range.upperBound - clamp(level)
     }
 
     static func stored() -> Int {

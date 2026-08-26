@@ -462,6 +462,19 @@ struct DuplicateFinderView: View {
             Text("判定のレベルを変えると、一度「違う」とした組が再び出ることがあります。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
+            #if DEBUG
+            Button {
+                scanner.runFullLevelSweep()
+            } label: {
+                if scanner.isSweepRunning {
+                    Label("全レベル照合中…", systemImage: "hourglass")
+                } else {
+                    Label("全レベル照合(開発用)", systemImage: "list.number")
+                }
+            }
+            .font(.caption)
+            .disabled(scanner.phase != .ready || scanner.isSweepRunning)
+            #endif
         }
         .padding(12)
         .background(Color(.secondarySystemBackground))

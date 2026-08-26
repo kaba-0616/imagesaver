@@ -320,6 +320,37 @@ final class DuplicateScanner: ObservableObject {
         regroup(note: "レベル変更", kind: .similar)
     }
 
+    #if DEBUG
+    private var sweepTask: Task<Void, Never>?
+    var isSweepRunning: Bool { sweepTask != nil }
+
+    /// Reruns the similar pass at every level in turn and leaves the level
+    /// back where it started. Development only: dragging the slider eleven
+    /// times and waiting after each one to see the whole curve is what this
+    /// replaces, and it is not something a release build's user has any
+    /// reason to trigger.
+    func runFullLevelSweep() {
+        guard sweepTask == nil else { return }
+        let originalLevel = level
+        sweepTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.log("全レベル一括照合を開始")
+            for candidate in DuplicateLevel.range {
+                self.level = candidate
+                self.regroup(note: "全レベル一括照合(レベル\(candidate))", kind: .similar)
+                while self.regrouping != nil || self.phase != .ready {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
+            self.level = originalLevel
+            DuplicateLevel.store(originalLevel)
+            self.regroup(note: "全レベル一括照合後の復帰", kind: .similar)
+            self.log("全レベル一括照合が完了")
+            self.sweepTask = nil
+        }
+    }
+    #endif
+
     /// `kind` is which tab to recompute -- `nil` means both, and only the
     /// initial post-scan pass and a rejection's token-mismatch fallback with
     /// no single group to point at ever ask for that. A manual reload or a
@@ -698,9 +729,38 @@ final class DuplicateScanner: ObservableObject {
         }
         log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚")
         log("類似の組サイズ: " + result.groups.map { String($0.members.count) }.joined(separator: ","))
+        // Below this size a breakdown is just noise; above it, it is the
+        // difference between guessing why a group is that size and knowing.
+        if let biggest = result.groups.max(by: { $0.members.count < $1.members.count }),
+           biggest.members.count >= 20 {
+            logLargestGroupComposition(biggest)
+        }
         updateReport()
 
         finishRegroup()
+    }
+
+    /// One line describing what the biggest group is actually made of, so a
+    /// group that will not shrink no matter how strict the level gets can be
+    /// told apart from a real chaining bug without reading raw identifiers.
+    private func logLargestGroupComposition(_ group: DuplicateGroup) {
+        let members = group.members
+        let burstIDs = Set(members.compactMap(\.burstIdentifier))
+        let dates = members.compactMap(\.creationDate).sorted()
+        let byteCounts = members.compactMap(\.byteCount)
+        let dimensions = Set(members.map { "\($0.width)x\($0.height)" })
+
+        var parts = ["\(members.count)枚 / バーストID種類\(burstIDs.count)"]
+        if let first = dates.first, let last = dates.last {
+            parts.append("撮影日時幅\(Int(last.timeIntervalSince(first)))秒")
+        }
+        if byteCounts.count == members.count, let min = byteCounts.min(), let max = byteCounts.max() {
+            parts.append("バイトサイズ\(min)〜\(max)")
+        } else {
+            parts.append("バイトサイズ不明\(members.count - byteCounts.count)枚")
+        }
+        parts.append("解像度種類\(dimensions.count)")
+        log("最大の組の内訳: " + parts.joined(separator: " / "))
     }
 
     /// Swaps in one tab's freshly computed groups, leaving the other tab's
