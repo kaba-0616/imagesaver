@@ -635,24 +635,27 @@ enum DuplicateGrouper {
                     let window = rowA.subdata(in: base..<(base + rowB.count))
                     guard variance(of: window) >= cropMinVariance else { continue }
 
-                    // Chaining guard, the same idea as groupSimilar's own
-                    // anchor check on the hamming-distance loop above: without
+                    // Chaining guard, the same idea as groupSimilar's own full
+                    // clique check on the hamming-distance loop above: without
                     // it, a run of successive near-miss crop matches (same
                     // wall, same framing, different people entirely) merges
                     // transitively -- each photo only ever had to look like
                     // its one neighbour in the chain, never like the group as
-                    // a whole. A real 180k-photo library still produced a
-                    // 52-photo group this way even after cropColumnGate,
-                    // cropRowMatch and cropMinVariance were tightened (see
-                    // their doc comments); those gates cut it from 559 to 52,
-                    // they did not close it. Requiring every new member to
-                    // also crop-match whichever photo founded this group --
-                    // not just whichever member happened to be compared
-                    // against it -- bounds a group's spread to one photo's
-                    // neighbourhood, the same fix the hamming loop already
-                    // has.
-                    let anchor = sets.find(i)
-                    if anchor != i, !cropMatch(prints[anchor], prints[j]) { continue }
+                    // a whole. An anchor-only version of this guard (checking
+                    // `j` against only the group's founding photo) cut a real
+                    // 180k-photo library's runaway group from 559 to 52, then
+                    // to 33 after cropColumnGate/cropRowMatch/cropMinVariance
+                    // were tightened further -- it never closed the gap,
+                    // because two non-anchor members could each crop-match
+                    // the anchor without crop-matching each other. Requiring
+                    // every existing member of `i`'s group to crop-match `j`
+                    // is the same full clique requirement `groupSimilar`
+                    // already uses for its own chaining guard.
+                    let rootI = sets.find(i)
+                    if rootI != i {
+                        let groupMembers = sets.groupMembers(ofRoot: rootI)
+                        guard groupMembers.allSatisfy({ $0 == i || cropMatch(prints[$0], prints[j]) }) else { continue }
+                    }
 
                     sets.union(i, j)
                     matchedPairs.append((i, j))
