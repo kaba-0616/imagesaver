@@ -788,6 +788,16 @@ final class DuplicateScanner: ObservableObject {
             }
         }
         log("最大の組の内訳: " + parts.joined(separator: " / "))
+
+        // displayOrder が実際に古い順になっているかは目視でしか確認できなかったため、
+        // ログで確認できるようにする。
+        let orderedDates = group.displayOrder.map { member -> String in
+            guard let date = member.creationDate else { return "不明" }
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MM/dd HH:mm"
+            return formatter.string(from: date)
+        }
+        log("表示順(古い順): " + orderedDates.joined(separator: " -> "))
     }
 
     /// Swaps in one tab's freshly computed groups, leaving the other tab's
