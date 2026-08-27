@@ -557,6 +557,22 @@ enum DuplicateGrouper {
     /// what keeps that from costing someone the full-frame photo instead of
     /// the cut one. Raised alongside the two gates above for the same reason.
     private static let cropMinVariance: Double = 200
+    /// Fine-hash (512-bit) distance above which a pair is rejected even if
+    /// every profile/variance check above passed. None of the checks above
+    /// look at pixel content at all -- only column/row brightness profiles
+    /// and how flat a window is -- so two different photos in front of the
+    /// same stage backdrop or plain wall can satisfy all of them. A real
+    /// 180,000-photo library found exactly that: a 33-photo group, fully
+    /// closed by the full-clique guard below, whose fine-hash distances were
+    /// still min 112 / avg 244.5 / max 320 out of 512 -- essentially the
+    /// ~256 two unrelated photos land at by chance, not what a genuine crop
+    /// of the same photo should show. 220 sits just under that random floor,
+    /// meant to reject only pairs indistinguishable from unrelated photos
+    /// while leaving real crops (which shift framing but still hash closer
+    /// to their source than chance) through. No real "true crop pair" fine
+    /// hash distance has been measured yet, so this is a starting point to
+    /// retune once one has, not a derived constant.
+    private static let cropFineHashGate = 220
 
     struct CropOutcome {
         let cropped: Set<Int>
@@ -634,6 +650,7 @@ enum DuplicateGrouper {
                     let base = rowA.startIndex + match.offset
                     let window = rowA.subdata(in: base..<(base + rowB.count))
                     guard variance(of: window) >= cropMinVariance else { continue }
+                    guard prints[i].fine.distance(to: prints[j].fine) <= cropFineHashGate else { continue }
 
                     // Chaining guard, the same idea as groupSimilar's own full
                     // clique check on the hamming-distance loop above: without
@@ -688,7 +705,8 @@ enum DuplicateGrouper {
               let match = bestCropOffset(full: rowA, crop: rowB), match.score >= cropRowMatch else { return false }
         let base = rowA.startIndex + match.offset
         let window = rowA.subdata(in: base..<(base + rowB.count))
-        return variance(of: window) >= cropMinVariance
+        guard variance(of: window) >= cropMinVariance else { return false }
+        return a.fine.distance(to: b.fine) <= cropFineHashGate
     }
 
     /// `static` rather than `private`: the largest-group diagnostic log in
