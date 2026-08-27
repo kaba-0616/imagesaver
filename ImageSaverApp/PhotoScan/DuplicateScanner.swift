@@ -759,6 +759,13 @@ final class DuplicateScanner: ObservableObject {
             parts.append("バイトサイズ不明\(members.count - byteCounts.count)枚")
         }
         parts.append("解像度種類\(dimensions.count)")
+        // Which pass actually produced this group: `croppedIdentifiers` is only
+        // ever populated by the crop pass (see `cropMatches`), so a non-empty
+        // count here is proof the group is crop-formed even when the hamming
+        // gates above would never have linked these members on their own.
+        parts.append("トリミング由来\(group.croppedIdentifiers.count)枚")
+        let widths = Set(members.map(\.width))
+        parts.append("幅種類\(widths.count)")
 
         // How close the actual matching gates came to telling these members
         // apart -- not just that they collided, but by how little. A group
