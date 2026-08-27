@@ -531,20 +531,8 @@ struct DuplicateFinderView: View {
     /// copying it out of here.
     private var footer: some View {
         VStack(spacing: 8) {
-            if !scanner.report.isEmpty {
-                Text(scanner.report)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            if scanner.rejectionCount > 0 {
-                Text("「違う」として除外中の組: \(scanner.rejectionCount) (設定から解除できます)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
             Button("もう一度調べる") { scanner.scan() }
                 .font(.caption2)
-            logRow
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 16)
