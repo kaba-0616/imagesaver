@@ -326,31 +326,41 @@ struct DuplicateFinderView: View {
     }
 
     private var list: some View {
-        GeometryReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    // Only on the similar tab. An exact copy and a burst are found
-                    // without the threshold taking any part in it, so offering the
-                    // slider next to them would claim an effect it does not have.
-                    if tab == .similar { levelControl }
-                    if visibleGroups.isEmpty {
-                        // The spacers, plus the frame(minHeight:) below, are
-                        // what put this in the middle of the screen instead
-                        // of just under levelControl -- a bare emptyState
-                        // here would sit at the top of a ScrollView whose
-                        // content is shorter than the screen.
-                        Spacer(minLength: 0)
-                        emptyState
-                        Spacer(minLength: 0)
-                    } else {
-                        ForEach(Array(visibleGroups.enumerated()), id: \.element.id) { index, group in
-                            card(group, number: index + 1)
+        VStack(spacing: 0) {
+            // Only on the similar tab. An exact copy and a burst are found
+            // without the threshold taking any part in it, so offering the
+            // slider next to them would claim an effect it does not have.
+            //
+            // Kept outside the GeometryReader below on purpose: it used to
+            // live inside the centered stack, and got pulled down along with
+            // it whenever the empty state centered itself -- the slider
+            // belongs pinned under the tab bar regardless of what the list
+            // below it is doing.
+            if tab == .similar {
+                levelControl
+                    .padding(16)
+            }
+            GeometryReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 16) {
+                        if visibleGroups.isEmpty {
+                            // The spacers, plus the frame(minHeight:) below, are
+                            // what put this in the middle of the remaining space
+                            // instead of at the top of a ScrollView whose content
+                            // is shorter than the screen.
+                            Spacer(minLength: 0)
+                            emptyState
+                            Spacer(minLength: 0)
+                        } else {
+                            ForEach(Array(visibleGroups.enumerated()), id: \.element.id) { index, group in
+                                card(group, number: index + 1)
+                            }
                         }
+                        footer
                     }
-                    footer
+                    .padding(16)
+                    .frame(minHeight: proxy.size.height, alignment: .center)
                 }
-                .padding(16)
-                .frame(minHeight: proxy.size.height, alignment: .center)
             }
         }
     }
