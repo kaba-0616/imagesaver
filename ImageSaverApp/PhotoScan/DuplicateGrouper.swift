@@ -256,17 +256,22 @@ enum DuplicateGrouper {
         // same as the crop thresholds below -- and see `histogramThreshold`
         // for the gate added after even 256 bits at distance 0 still let a
         // 33-photo group of unrelated pictures through.
-        // Multiplier raised from 8 to 20 (build93): at level 0 (threshold 10)
-        // the old formula gave fineThreshold=80/512, tight enough to miss a
-        // photo genuinely re-encoded elsewhere -- a low-quality copy pulled
-        // off a website next to the original, say, where the smaller copy's
-        // fine detail is really gone, not just differently compressed. The
-        // other three gates (coarse hash, aspect ratio, colour histogram)
-        // still apply unchanged, so widening this one does not hand back the
-        // 182k-photo runaway that widening thresholds broadly once did.
-        // Provisional pending real-device near-miss data -- see
-        // `collectNearMisses` below.
-        let fineThreshold = min(threshold * 20, 512)
+        // Multiplier raised from 8 (build92) to 20 (build93) to 25 (build94):
+        // at level 0 (threshold 10) the original formula gave
+        // fineThreshold=80/512, tight enough to miss a photo genuinely
+        // re-encoded elsewhere -- a low-quality copy pulled off a website
+        // next to the original, say, where the smaller copy's fine detail is
+        // really gone, not just differently compressed. Real-device near-miss
+        // data from build93 (run #53) showed every rejected pair was already
+        // well inside build93's fineThreshold=200 and was failing on
+        // histogramThreshold instead, so 25 (level 0 = 250) is not chasing a
+        // fine-hash problem anymore -- it is the level-0 target value fixed
+        // by the user directly, with headroom above what real near-misses
+        // needed. The other three gates (coarse hash, aspect ratio, colour
+        // histogram) still apply unchanged, so widening this one does not
+        // hand back the 182k-photo runaway that widening thresholds broadly
+        // once did.
+        let fineThreshold = min(threshold * 25, 512)
         let histoThreshold = histogramThreshold(for: threshold)
         let hasRejections = !rejectedPairs.isEmpty
         // The work is a triangle, so i/n would claim half done a quarter of the
@@ -454,8 +459,13 @@ enum DuplicateGrouper {
     /// `fineThreshold` is: a looser level should tolerate a somewhat bigger
     /// colour mismatch, not none at all. A value to retune from a real
     /// library, same as every other gate in this file.
+    // build93's near-miss diagnostics (real device, run #53) found this was
+    // the actual bottleneck once fineThreshold was widened: every pair the
+    // user's website-quality-copy case would need was already well inside
+    // the fine-hash gate, but fell 0.1-1.3 short of build93's 30.0 at level
+    // 0. Coefficients raised (build94) so level 0 lands exactly on the 40 cap.
     private static func histogramThreshold(for threshold: Int) -> Double {
-        min(10.0 + Double(threshold) * 2.0, 40)
+        min(10.0 + Double(threshold) * 3.0, 40)
     }
 
     // MARK: - Shared setup

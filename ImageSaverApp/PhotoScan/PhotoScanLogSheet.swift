@@ -42,8 +42,15 @@ struct PhotoScanLogSheet: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("全部コピー") {
-                        UIPasteboard.general.string = allText
+                    // A plain "copy all" button used to hand Claude every run
+                    // kept on the device at once -- fine for the person
+                    // pasting it, expensive for the tokens on the other end.
+                    // Most questions are about the run that just finished.
+                    Menu("コピー") {
+                        ForEach([1, 3, 5], id: \.self) { count in
+                            Button("直近\(count)件") { copy(recentRuns: count) }
+                        }
+                        Button("全部(\(log.newestFirst.count)件)") { copy(recentRuns: log.newestFirst.count) }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -76,6 +83,10 @@ struct PhotoScanLogSheet: View {
 
     private var allText: String {
         AppVersion.short + "\n" + memoryLine + "\n\n" + log.allText
+    }
+
+    private func copy(recentRuns: Int) {
+        UIPasteboard.general.string = AppVersion.short + "\n" + memoryLine + "\n\n" + log.text(recentRuns: recentRuns)
     }
 
     private func section(_ run: PhotoScanRun) -> some View {

@@ -86,9 +86,15 @@ final class PhotoScanLog: ObservableObject {
     /// Newest first: the run being asked about is almost always the last one.
     var newestFirst: [PhotoScanRun] { runs.reversed() }
 
-    var allText: String {
+    var allText: String { text(recentRuns: newestFirst.count) }
+
+    /// The same format as `allText`, limited to the `recentRuns` most recent
+    /// runs -- pasting the whole store back to Claude costs real tokens, and
+    /// almost every question is about the run that just finished, not the
+    /// nineteen before it.
+    func text(recentRuns: Int) -> String {
         var out: [String] = []
-        for run in newestFirst {
+        for run in newestFirst.prefix(recentRuns) {
             out.append("=== \(run.label) ===")
             if run.lines.isEmpty {
                 out.append("(記録なし)")
