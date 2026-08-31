@@ -442,11 +442,16 @@ final class DuplicateScanner: ObservableObject {
                     self?.updateGrouping(fraction: fraction, remaining: remaining, token: token)
                 }
             }
+            // Only at level 0 of the dev sweep: the diagnostic is meant to
+            // answer "how close did the loosest level come" for a report that
+            // shows nothing in the results themselves, not to cost every
+            // regroup the extra pass.
             let result = DuplicateGrouper.groupSimilar(snapshot,
                                                        level: level,
                                                        rejected: rejectedSimilar,
                                                        cropCache: reusableCrop,
                                                        cropTimeShare: cropTimeShare,
+                                                       collectNearMisses: note.contains("(レベル0)"),
                                                        progress: progress)
             let elapsed = PhotoScanFormat.milliseconds(since: started)
             Task { @MainActor [weak self] in
@@ -728,6 +733,14 @@ final class DuplicateScanner: ObservableObject {
         }
         log("トリミング検知: \(croppedGroups)組\(croppedPhotos)枚")
         log("類似の組サイズ: " + result.groups.map { String($0.members.count) }.joined(separator: ","))
+        if !result.nearMisses.isEmpty {
+            log("僅差ペア(結果には出ないが精細ハッシュ/色差で惜しくも弾かれた組): \(result.nearMisses.count)件")
+            for miss in result.nearMisses {
+                let byteA = miss.byteCountA.map { "\($0)B" } ?? "?B"
+                let byteB = miss.byteCountB.map { "\($0)B" } ?? "?B"
+                log("  精細距離\(miss.fineDistance)/\(miss.fineThreshold) 色差\(String(format: "%.1f", miss.histogramDiff))/\(String(format: "%.1f", miss.histogramThreshold)) : \(miss.widthA)x\(miss.heightA)(\(byteA)) vs \(miss.widthB)x\(miss.heightB)(\(byteB))")
+            }
+        }
         // Below this size a breakdown is just noise; above it, it is the
         // difference between guessing why a group is that size and knowing.
         if let biggest = result.groups.max(by: { $0.members.count < $1.members.count }),

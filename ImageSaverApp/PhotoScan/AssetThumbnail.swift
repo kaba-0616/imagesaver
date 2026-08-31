@@ -25,34 +25,15 @@ struct AssetThumbnail: View {
         .task(id: identifier) {
             guard image == nil else { return }
             let scale = UIScreen.main.scale
-            image = await AssetThumbnailLoader.image(
-                for: identifier,
-                target: CGSize(width: side * scale, height: side * scale))
+            let target = CGSize(width: side * scale, height: side * scale)
+            for await candidate in AssetThumbnailLoader.images(for: identifier, target: target) {
+                image = candidate
+            }
         }
     }
 }
 
 enum AssetThumbnailLoader {
-
-    /// Resumes exactly once, whichever of the callback and the deadline gets
-    /// there first. A checked continuation resumed twice is a crash, and one
-    /// never resumed leaves the tile waiting for good.
-    private final class Gate: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<UIImage?, Never>?
-
-        init(_ continuation: CheckedContinuation<UIImage?, Never>) {
-            self.continuation = continuation
-        }
-
-        func settle(_ image: UIImage?) {
-            lock.lock()
-            let pending = continuation
-            continuation = nil
-            lock.unlock()
-            pending?.resume(returning: image)
-        }
-    }
 
     /// Only ever used for the deadline below, which never blocks it.
     private static let timer = DispatchQueue(label: "jp.kaba.imagesaver.thumbnail",
@@ -62,39 +43,62 @@ enum AssetThumbnailLoader {
     /// them at once, and a blocking wait per tile ties up one thread each for
     /// as long as the slowest of them takes -- which is how a grid of pictures
     /// turns into the stall this app was written to get away from.
-    static func image(for identifier: String, target: CGSize) async -> UIImage? {
-        await withCheckedContinuation { continuation in
-            let gate = Gate(continuation)
+    ///
+    /// `.opportunistic` delivery: unlike the old `.fastFormat` (whatever
+    /// Photos already has cached, once), this yields a quick low-quality
+    /// preview first and then the properly resized version once Photos has
+    /// rendered it -- which is what made list thumbnails look permanently
+    /// blurry for a photo Photos had not already cached at this size. The
+    /// stream yields once for the low-quality pass and again for the final
+    /// one, then finishes; the 8s deadline guards against the final pass
+    /// never arriving (an iCloud original with network access off).
+    static func images(for identifier: String, target: CGSize) -> AsyncStream<UIImage> {
+        AsyncStream { continuation in
+            let finishOnce = FinishOnce(continuation)
             DispatchQueue.global(qos: .userInitiated).async {
-                // Armed before anything that can take its time, fetchAssets
-                // included: a fetch that does not come back would otherwise
-                // leave the continuation with nothing left to resume it, and
-                // the tile sits at "loading" for the life of the screen. It
-                // cannot fire twice into the continuation, and it holds
-                // nothing while it waits.
-                timer.asyncAfter(deadline: .now() + 8) { gate.settle(nil) }
+                timer.asyncAfter(deadline: .now() + 8) { finishOnce.finish() }
 
                 let found = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
                 guard let asset = found.firstObject else {
-                    gate.settle(nil)
+                    finishOnce.finish()
                     return
                 }
 
                 let options = PHImageRequestOptions()
-                // fastFormat calls back exactly once, with whatever the system
-                // already has. Network access stays off: a tile is not worth
-                // the user's data, and the card marks iCloud photos anyway.
-                options.deliveryMode = .fastFormat
+                options.deliveryMode = .opportunistic
                 options.resizeMode = .fast
                 options.isNetworkAccessAllowed = false
 
                 PHImageManager.default().requestImage(for: asset,
                                                       targetSize: target,
                                                       contentMode: .aspectFill,
-                                                      options: options) { image, _ in
-                    gate.settle(image)
+                                                      options: options) { image, info in
+                    if let image { continuation.yield(image) }
+                    let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                    if !isDegraded { finishOnce.finish() }
                 }
             }
+        }
+    }
+
+    /// `AsyncStream.Continuation.finish()` is safe to call more than once by
+    /// itself, but the deadline timer and the image callback both hold a
+    /// reference to this and either can fire first -- this just keeps that
+    /// race from being reasoned about twice in two different places.
+    private final class FinishOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: AsyncStream<UIImage>.Continuation?
+
+        init(_ continuation: AsyncStream<UIImage>.Continuation) {
+            self.continuation = continuation
+        }
+
+        func finish() {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.finish()
         }
     }
 }
