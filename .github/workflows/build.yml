@@ -81,3 +81,12 @@ jobs:
           name: ImageSaver-ipa
           path: build/ImageSaver.ipa
           retention-days: 14
+
+      - name: Show download link
+        run: |
+          # Artifacts have no public direct-download URL (GitHub requires a
+          # logged-in session even on a public repo) -- this run's own page
+          # is the closest thing to one, and is where the download button
+          # actually lives.
+          echo "### ビルドDLページ" >> "$GITHUB_STEP_SUMMARY"
+          echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
