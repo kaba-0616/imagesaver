@@ -256,22 +256,26 @@ enum DuplicateGrouper {
         // same as the crop thresholds below -- and see `histogramThreshold`
         // for the gate added after even 256 bits at distance 0 still let a
         // 33-photo group of unrelated pictures through.
-        // Multiplier raised from 8 (build92) to 20 (build93) to 25 (build94):
-        // at level 0 (threshold 10) the original formula gave
-        // fineThreshold=80/512, tight enough to miss a photo genuinely
+        // Multiplier raised from 8 (build92) to 20 (build93) to 25 (build94)
+        // to 30 (build95): at level 0 (threshold 10) the original formula
+        // gave fineThreshold=80/512, tight enough to miss a photo genuinely
         // re-encoded elsewhere -- a low-quality copy pulled off a website
         // next to the original, say, where the smaller copy's fine detail is
-        // really gone, not just differently compressed. Real-device near-miss
-        // data from build93 (run #53) showed every rejected pair was already
-        // well inside build93's fineThreshold=200 and was failing on
-        // histogramThreshold instead, so 25 (level 0 = 250) is not chasing a
-        // fine-hash problem anymore -- it is the level-0 target value fixed
-        // by the user directly, with headroom above what real near-misses
-        // needed. The other three gates (coarse hash, aspect ratio, colour
-        // histogram) still apply unchanged, so widening this one does not
-        // hand back the 182k-photo runaway that widening thresholds broadly
-        // once did.
-        let fineThreshold = min(threshold * 25, 512)
+        // really gone, not just differently compressed. build94's own
+        // near-miss data (run #54) showed histogramThreshold was no longer
+        // the bottleneck -- the 20 rejected pairs were all colour-histogram
+        // matches (9.3-22.9, well inside 40.0) rejected on fine hash instead,
+        // at distance 251-252, just 1-2 over build94's fineThreshold=250. 30
+        // (level 0 = 300) gives that real data real headroom. The other
+        // three gates (coarse hash, aspect ratio, colour histogram) still
+        // apply unchanged, so widening this one does not hand back the
+        // 182k-photo runaway that widening thresholds broadly once did.
+        //
+        // Level 10 (threshold 0) is the one exception to the `* 30` formula:
+        // it stays at 1, not 0, on the user's explicit direction -- a single
+        // bit of fine-hash slack even at "identical only", rather than
+        // requiring the 512-bit hash to match exactly.
+        let fineThreshold = threshold == 0 ? 1 : min(threshold * 30, 512)
         let histoThreshold = histogramThreshold(for: threshold)
         let hasRejections = !rejectedPairs.isEmpty
         // The work is a triangle, so i/n would claim half done a quarter of the
