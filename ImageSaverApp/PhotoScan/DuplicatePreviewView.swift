@@ -333,8 +333,18 @@ struct DuplicatePreviewView: View {
                 groups.remove(at: removedIndex)
                 if groups.isEmpty {
                     onClose()
-                } else if let targetGroupID,
-                          let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
+                    return
+                }
+                // TabView(.page) asked to shrink its page count and move the
+                // selection in the same state update does not reliably
+                // repaint on iOS 15 -- the strip and the pager both sit
+                // frozen on the rejected group until something else forces a
+                // re-layout. Letting the page-count change land on its own
+                // first is what makes the selection change afterward actually
+                // take.
+                await Task.yield()
+                if let targetGroupID,
+                   let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
                     index = newPage
                 } else {
                     index = min(index, pages.count - 1)
@@ -362,35 +372,49 @@ struct DuplicatePreviewView: View {
                     .foregroundColor(.white.opacity(0.8))
             }
         }
+        // An overlay rather than a third HStack slot: "閉じる" and the page
+        // count are different widths, and only an overlay keeps this block
+        // centered on the screen regardless of that difference.
+        .overlay(centerInfo)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color.black.opacity(0.45))
     }
 
     @ViewBuilder
+    private var centerInfo: some View {
+        if let member = currentMember {
+            VStack(spacing: 1) {
+                Text(PhotoScanFormat.dayTime(member.creationDate))
+                    .font(.caption)
+                    .foregroundColor(.white)
+                Text(detailLine(member))
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.75))
+                if let name = scanner.details[member.localIdentifier]?.originalFilename {
+                    Text(name)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.6))
+                        .lineLimit(1)
+                        // The extension at the end is what tells two
+                        // otherwise-identical filenames apart (HEIC vs JPG
+                        // from the same shot), so the truncation has to
+                        // leave the tail alone.
+                        .truncationMode(.middle)
+                }
+            }
+            // Capped short of the full width so three lines of text never
+            // reach far enough to sit under "閉じる" or the page count on
+            // either side.
+            .frame(maxWidth: 180)
+        }
+    }
+
+    @ViewBuilder
     private var bottomBar: some View {
         if let member = currentMember {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(PhotoScanFormat.dayTime(member.creationDate))
-                        .font(.footnote)
-                        .foregroundColor(.white)
-                    Text(detailLine(member))
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.75))
-                    if let name = scanner.details[member.localIdentifier]?.originalFilename {
-                        Text(name)
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.6))
-                            .lineLimit(1)
-                            // The extension at the end is what tells two
-                            // otherwise-identical filenames apart (HEIC vs
-                            // JPG from the same shot), so the truncation has
-                            // to leave the tail alone.
-                            .truncationMode(.middle)
-                    }
-                }
-                Spacer(minLength: 8)
+            HStack {
+                Spacer()
                 selectButton(member)
             }
             .padding(.horizontal, 16)
