@@ -8,6 +8,7 @@ import Photos
 struct AssetDetail: Equatable {
     var byteCount: Int64?
     var isLocallyAvailable: Bool?
+    var originalFilename: String?
 }
 
 /// PHAsset has no public API for either of these, so both are read through
@@ -61,7 +62,15 @@ enum AssetDetailReader {
             }
         }
 
-        return AssetDetail(byteCount: total > 0 ? total : nil, isLocallyAvailable: available)
+        // Unlike byteCount/isLocallyAvailable this is a real public property,
+        // not a KVC guess -- but a Live Photo's video resource has its own
+        // filename, so the photo resource is still picked deliberately rather
+        // than just taking whichever one came first.
+        let named = resources.first { $0.type == .photo || $0.type == .fullSizePhoto } ?? resources[0]
+
+        return AssetDetail(byteCount: total > 0 ? total : nil,
+                           isLocallyAvailable: available,
+                           originalFilename: named.originalFilename)
     }
 
     private static func byteCount(of resource: PHAssetResource) -> Int64? {

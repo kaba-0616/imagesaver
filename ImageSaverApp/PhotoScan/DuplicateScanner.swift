@@ -64,6 +64,28 @@ final class DuplicateScanner: ObservableObject {
         case groupTooLarge(Int)
         case storeFull(Int)
         case failed(String)
+
+        /// The wording for every place a rejection outcome reaches the
+        /// screen -- the grid's "≠" button and the fullscreen viewer's both
+        /// say the same thing about the same outcome, and one wrong copy
+        /// drifting from the other is not a risk worth taking for two call
+        /// sites.
+        func describe(success: String?) -> String? {
+            switch self {
+            case .done:
+                return success
+            case .busy:
+                return "前の「違う」を保存している最中でした。少し待ってからもう一度押してください。"
+            case .listChanged:
+                return "記録は保存しました。一覧が入れ替わったため、照合をやり直しています。"
+            case .groupTooLarge(let count):
+                return "\(count)枚の組は大きすぎるため「違う」として記録できませんでした。組を分けてから試してください。"
+            case .storeFull(let pairs):
+                return "「違う」の記録が上限に達したため保存できませんでした (\(pairs)組相当)。除外を解除すると空きます。"
+            case .failed(let text):
+                return "「違う」の記録に失敗しました: \(text)"
+            }
+        }
     }
 
     @Published private(set) var phase: Phase = .idle

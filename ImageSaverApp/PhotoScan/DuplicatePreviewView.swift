@@ -1,7 +1,10 @@
 import SwiftUI
 import Photos
 
-/// One group, opened big.
+/// One photo of a group, opened big -- and, unlike a single group's worth of
+/// pages, the whole run of groups that was on screen when it opened, so
+/// swiping past the last photo of one group carries straight into the next
+/// instead of stopping there.
 ///
 /// Pinch to zoom and double tap to come back; there is deliberately no pan.
 /// TabView's paging and a DragGesture of our own fight over the same finger on
@@ -13,9 +16,20 @@ struct DuplicatePreviewView: View {
 
     @ObservedObject var scanner: DuplicateScanner
 
-    /// Copied in when the tile was tapped, so the pages cannot re-order under
-    /// the user if the file sizes land while this is open.
-    let members: [PhotoFingerprint]
+    /// One page: which group a photo belongs to, and the photo itself.
+    /// `groupID` is what lets the "≠" tile in the filmstrip know which whole
+    /// group to reject, and what lets the pager land back inside the right
+    /// group's run of pages after one is removed.
+    private struct Page {
+        let groupID: Int
+        let member: PhotoFingerprint
+    }
+
+    /// Copied in when the tile was tapped, so the run of groups cannot
+    /// re-order under the user if a file size lands while this is open --
+    /// mutable only so a group can be dropped from it the moment "≠" removes
+    /// that group everywhere else.
+    @State private var groups: [DuplicateGroup]
     let onClose: () -> Void
 
     @StateObject private var loader = PreviewImageLoader()
@@ -23,16 +37,30 @@ struct DuplicatePreviewView: View {
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
     @State private var dragOffset: CGFloat = 0
+    /// A rejection outcome that was not simply "done" (busy, over the pair
+    /// limit, a failed write) has nowhere else to surface on this fullscreen
+    /// screen, so it gets this instead of the grid's inline message text.
+    @State private var toast: String?
+
+    private var pages: [Page] {
+        groups.flatMap { group in group.displayOrder.map { Page(groupID: group.id, member: $0) } }
+    }
 
     init(scanner: DuplicateScanner,
-         members: [PhotoFingerprint],
-         startIndex: Int,
+         groups: [DuplicateGroup],
+         startGroupIndex: Int,
+         startMemberIndex: Int,
          onClose: @escaping () -> Void) {
         self.scanner = scanner
-        self.members = members
         self.onClose = onClose
-        let last = max(members.count - 1, 0)
-        _index = State(initialValue: min(max(startIndex, 0), last))
+        _groups = State(initialValue: groups)
+
+        let groupIndex = min(max(startGroupIndex, 0), max(groups.count - 1, 0))
+        var flat = 0
+        for group in groups[..<groupIndex] { flat += group.displayOrder.count }
+        let memberCount = groups.indices.contains(groupIndex) ? groups[groupIndex].displayOrder.count : 0
+        flat += min(max(startMemberIndex, 0), max(memberCount - 1, 0))
+        _index = State(initialValue: flat)
     }
 
     var body: some View {
@@ -43,6 +71,16 @@ struct DuplicatePreviewView: View {
                 .offset(y: dragOffset)
             VStack(spacing: 0) {
                 topBar
+                if let toast {
+                    Text(toast)
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.black.opacity(0.6))
+                        .cornerRadius(8)
+                        .padding(.top, 4)
+                }
                 Spacer(minLength: 0)
                 filmstrip
                 bottomBar
@@ -100,7 +138,7 @@ struct DuplicatePreviewView: View {
 
     private var pager: some View {
         TabView(selection: $index) {
-            ForEach(Array(members.enumerated()), id: \.element.localIdentifier) { offset, _ in
+            ForEach(Array(pages.enumerated()), id: \.offset) { offset, _ in
                 page(at: offset)
                     .tag(offset)
             }
@@ -111,7 +149,7 @@ struct DuplicatePreviewView: View {
     /// Spelled out rather than written inline: a ternary inside `.page(...)`
     /// leaves the compiler inferring the style and the mode at once.
     private var indexDisplayMode: PageTabViewStyle.IndexDisplayMode {
-        members.count > 1 ? .automatic : .never
+        pages.count > 1 ? .automatic : .never
     }
 
     /// Only the page in front of the user draws a photo. The ones either side
@@ -171,48 +209,143 @@ struct DuplicatePreviewView: View {
 
     // MARK: - Filmstrip
 
-    /// A page dot says which of twelve you are on. It does not say which
-    /// twelve, and these are near-identical frames of one moment -- so the
-    /// group itself goes along the bottom, current one lit.
-    @ViewBuilder
-    private var filmstrip: some View {
-        if members.count > 1 {
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 6) {
-                        ForEach(Array(members.enumerated()),
-                                id: \.element.localIdentifier) { offset, member in
-                            filmstripTile(member, at: offset).id(offset)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-                .frame(height: 68)
-                .background(Color.black.opacity(0.45))
-                .onChange(of: index) { moved in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(moved, anchor: .center)
-                    }
-                }
+    /// One tile of the strip below: a page to jump to, the "≠" that rejects
+    /// the group it trails, or the thin bar marking where one group's run of
+    /// pages ends and the next begins.
+    private enum FilmstripItem: Identifiable {
+        case photo(pageIndex: Int, member: PhotoFingerprint)
+        case reject(groupID: Int)
+        case divider(afterGroupID: Int)
+
+        var id: String {
+            switch self {
+            case .photo(let pageIndex, let member): return "photo-\(pageIndex)-\(member.localIdentifier)"
+            case .reject(let groupID): return "reject-\(groupID)"
+            case .divider(let groupID): return "divider-\(groupID)"
             }
         }
     }
 
-    private func filmstripTile(_ member: PhotoFingerprint, at offset: Int) -> some View {
-        let current = offset == index
-        let chosen = scanner.selected.contains(member.localIdentifier)
-        return AssetThumbnail(identifier: member.localIdentifier, side: 52)
-            .cornerRadius(4)
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(current ? Color.accentColor
-                                          : (chosen ? Color.white.opacity(0.8) : Color.clear),
-                                  lineWidth: current ? 3 : 2)
-            )
-            .opacity(current ? 1 : 0.5)
-            .contentShape(Rectangle())
-            .onTapGesture { index = offset }
+    /// Every group's tiles followed by its own "≠", with a divider between
+    /// one group's run and the next -- built fresh from `groups` each time
+    /// `body` re-renders, which is exactly when a rejection may have removed
+    /// one and this needs to look different anyway.
+    private var filmstripItems: [FilmstripItem] {
+        var items: [FilmstripItem] = []
+        var pageIndex = 0
+        for (offset, group) in groups.enumerated() {
+            for member in group.displayOrder {
+                items.append(.photo(pageIndex: pageIndex, member: member))
+                pageIndex += 1
+            }
+            items.append(.reject(groupID: group.id))
+            if offset < groups.count - 1 { items.append(.divider(afterGroupID: group.id)) }
+        }
+        return items
+    }
+
+    /// A page dot says which of twelve you are on. It does not say which
+    /// twelve, and these are near-identical frames of one moment -- so the
+    /// group itself goes along the bottom, current one lit. Spanning every
+    /// group on screen rather than just the one open when this view was
+    /// shown is what lets a swipe carry from one group's last photo straight
+    /// into the next group's first.
+    @ViewBuilder
+    private var filmstrip: some View {
+        if pages.count > 1 {
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 6) {
+                            ForEach(filmstripItems) { item in
+                                filmstripTile(item)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        // A short group's row of tiles is narrower than the
+                        // screen; without this it sits at the left edge
+                        // instead of the middle a longer row would fill.
+                        .frame(minWidth: geometry.size.width, alignment: .center)
+                    }
+                    .onChange(of: index) { moved in
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(moved, anchor: .center)
+                        }
+                    }
+                }
+            }
+            .frame(height: 68)
+            .background(Color.black.opacity(0.45))
+        }
+    }
+
+    @ViewBuilder
+    private func filmstripTile(_ item: FilmstripItem) -> some View {
+        switch item {
+        case .photo(let pageIndex, let member):
+            let current = pageIndex == index
+            let chosen = scanner.selected.contains(member.localIdentifier)
+            AssetThumbnail(identifier: member.localIdentifier, side: 52)
+                .cornerRadius(4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(current ? Color.accentColor
+                                              : (chosen ? Color.white.opacity(0.8) : Color.clear),
+                                      lineWidth: current ? 3 : 2)
+                )
+                .opacity(current ? 1 : 0.5)
+                .contentShape(Rectangle())
+                .onTapGesture { index = pageIndex }
+                .id(pageIndex)
+        case .reject(let groupID):
+            Button {
+                rejectAndAdvance(groupID)
+            } label: {
+                Text("≠")
+                    .font(.body.weight(.semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 36, height: 52)
+                    .background(Color.white.opacity(0.15))
+                    .cornerRadius(4)
+            }
+        case .divider:
+            Rectangle()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 1, height: 40)
+        }
+    }
+
+    /// "≠" pressed on a group's tile: the whole group goes, the same
+    /// decision `DuplicateGroupCard`'s own reject button records, but without
+    /// leaving fullscreen to do it. Landing the pager back at the group that
+    /// used to follow this one keeps a straight run through "not this one
+    /// either" presses feeling continuous instead of jumping to page one.
+    private func rejectAndAdvance(_ groupID: Int) {
+        guard let removedIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        let group = groups[removedIndex]
+        Task {
+            let outcome = await scanner.reject(group)
+            switch outcome {
+            case .done, .listChanged:
+                let targetGroupID = groups[(removedIndex + 1)...].first?.id
+                    ?? groups[..<removedIndex].last?.id
+                groups.remove(at: removedIndex)
+                if groups.isEmpty {
+                    onClose()
+                } else if let targetGroupID,
+                          let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
+                    index = newPage
+                } else {
+                    index = min(index, pages.count - 1)
+                }
+            case .busy, .groupTooLarge, .storeFull, .failed:
+                let shown = outcome.describe(success: nil)
+                toast = shown
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if toast == shown { toast = nil }
+            }
+        }
     }
 
     // MARK: - Bars
@@ -223,8 +356,8 @@ struct DuplicatePreviewView: View {
                 .font(.body.weight(.semibold))
                 .foregroundColor(.white)
             Spacer()
-            if members.count > 1 {
-                Text("\(index + 1) / \(members.count)")
+            if pages.count > 1 {
+                Text("\(index + 1) / \(pages.count)")
                     .font(.footnote.monospacedDigit())
                     .foregroundColor(.white.opacity(0.8))
             }
@@ -239,12 +372,23 @@ struct DuplicatePreviewView: View {
         if let member = currentMember {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(PhotoScanFormat.day(member.creationDate))
+                    Text(PhotoScanFormat.dayTime(member.creationDate))
                         .font(.footnote)
                         .foregroundColor(.white)
                     Text(detailLine(member))
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.75))
+                    if let name = scanner.details[member.localIdentifier]?.originalFilename {
+                        Text(name)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                            .lineLimit(1)
+                            // The extension at the end is what tells two
+                            // otherwise-identical filenames apart (HEIC vs
+                            // JPG from the same shot), so the truncation has
+                            // to leave the tail alone.
+                            .truncationMode(.middle)
+                    }
                 }
                 Spacer(minLength: 8)
                 selectButton(member)
@@ -283,8 +427,8 @@ struct DuplicatePreviewView: View {
     // MARK: - Data
 
     private var currentMember: PhotoFingerprint? {
-        guard index >= 0, index < members.count else { return nil }
-        return members[index]
+        guard index >= 0, index < pages.count else { return nil }
+        return pages[index].member
     }
 
     private func detailLine(_ member: PhotoFingerprint) -> String {

@@ -21,6 +21,12 @@ enum PhotoScanFormat {
         return formatter
     }()
 
+    private static let dayTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy/MM/dd HH:mm"
+        return formatter
+    }()
+
     /// ByteCountFormatter rather than the newer ByteCountFormatStyle: the
     /// latter is iOS 15 too, but writes "1 kB" where every other photo app on
     /// the phone writes "1 KB".
@@ -36,6 +42,11 @@ enum PhotoScanFormat {
     static func day(_ date: Date?) -> String {
         guard let date else { return "日付なし" }
         return dayFormatter.string(from: date)
+    }
+
+    static func dayTime(_ date: Date?) -> String {
+        guard let date else { return "日付なし" }
+        return dayTimeFormatter.string(from: date)
     }
 
     /// nil when the size could not be read, so the caller can leave the label

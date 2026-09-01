@@ -335,6 +335,16 @@ enum DuplicateGrouper {
                     outer: for a in groupI {
                         for b in groupJ {
                             if a == i && b == j { continue } // already checked above
+                            // A pair the user pressed "≠" on must block this
+                            // merge exactly like a failed isCandidateMatch --
+                            // otherwise a rejection only ever protected the
+                            // single pair tapped at the time, and the same
+                            // two photos came back together the moment some
+                            // third photo linked their groups again.
+                            if hasRejections && rejectedPairs.contains(pairKey(a, b)) {
+                                allMatch = false
+                                break outer
+                            }
                             guard isCandidateMatch(a, b, prints: prints, coarse: coarse, aspects: aspects,
                                                    threshold: threshold, fineThreshold: fineThreshold,
                                                    histogramThreshold: histoThreshold) else {
@@ -765,7 +775,11 @@ enum DuplicateGrouper {
                     let rootI = sets.find(i)
                     if rootI != i {
                         let groupMembers = sets.groupMembers(ofRoot: rootI)
-                        guard groupMembers.allSatisfy({ $0 == i || cropMatch(prints[$0], prints[j]) }) else { continue }
+                        guard groupMembers.allSatisfy({ member in
+                            member == i
+                                || (!(hasRejections && rejectedPairs.contains(pairKey(member, j)))
+                                    && cropMatch(prints[member], prints[j]))
+                        }) else { continue }
                     }
 
                     sets.union(i, j)

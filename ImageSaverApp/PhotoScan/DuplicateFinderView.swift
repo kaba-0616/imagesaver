@@ -99,8 +99,9 @@ struct DuplicateFinderView: View {
             }
             .fullScreenCover(item: $preview) { target in
                 DuplicatePreviewView(scanner: scanner,
-                                     members: target.members,
-                                     startIndex: target.index) {
+                                     groups: target.groups,
+                                     startGroupIndex: target.startGroupIndex,
+                                     startMemberIndex: target.startMemberIndex) {
                     preview = nil
                 }
             }
@@ -426,7 +427,9 @@ struct DuplicateFinderView: View {
             onDeselectGroup: { scanner.deselectGroup(group) },
             onReject: { Task { await reject(group) } },
             onOpen: { index in
-                preview = PreviewTarget(id: group.id, members: group.displayOrder, index: index)
+                let groupIndex = visibleGroups.firstIndex(where: { $0.id == group.id }) ?? 0
+                preview = PreviewTarget(id: group.id, groups: visibleGroups,
+                                        startGroupIndex: groupIndex, startMemberIndex: index)
             }
         )
     }
@@ -665,45 +668,28 @@ struct DuplicateFinderView: View {
     }
 
     private func reject(_ group: DuplicateGroup) async {
-        message = describe(await scanner.reject(group), success: nil)
+        message = await scanner.reject(group).describe(success: nil)
     }
 
     private func undoRejection() async {
-        message = describe(await scanner.undoRejection(), success: "「違う」を取り消しました。")
+        message = await scanner.undoRejection().describe(success: "「違う」を取り消しました。")
     }
 
     private func clearRejections(kind: DuplicateGroup.Kind) async {
-        message = describe(await scanner.clearRejections(kind: kind),
-                           success: "「\(kind.tabLabel)」の除外をすべて解除しました。")
-    }
-
-    /// A rejection that was not stored must say so. Dropping the card anyway
-    /// would leave the user believing a decision was kept that will be gone the
-    /// next time the screen is opened.
-    private func describe(_ outcome: DuplicateScanner.RejectOutcome,
-                          success: String?) -> String? {
-        switch outcome {
-        case .done:
-            return success
-        case .busy:
-            return "前の「違う」を保存している最中でした。少し待ってからもう一度押してください。"
-        case .listChanged:
-            return "記録は保存しました。一覧が入れ替わったため、照合をやり直しています。"
-        case .groupTooLarge(let count):
-            return "\(count)枚の組は大きすぎるため「違う」として記録できませんでした。組を分けてから試してください。"
-        case .storeFull(let pairs):
-            return "「違う」の記録が上限に達したため保存できませんでした (\(pairs)組相当)。除外を解除すると空きます。"
-        case .failed(let text):
-            return "「違う」の記録に失敗しました: \(text)"
-        }
+        message = await scanner.clearRejections(kind: kind)
+            .describe(success: "「\(kind.tabLabel)」の除外をすべて解除しました。")
     }
 }
 
-/// What the fullscreen viewer is opened with. The members are copied in at the
-/// moment of the tap, so the pages cannot shuffle under the user if the sizes
-/// arrive and the group is re-ordered while it is open.
+/// What the fullscreen viewer is opened with: every group on screen at the
+/// moment of the tap, not just the one that was tapped, so swiping past the
+/// last photo in a group carries on into the next one instead of stopping.
+/// Copied in rather than read live from the scanner, so the run of groups
+/// cannot reorder under the user if a size lands mid-view -- the viewer
+/// tracks its own rejections against this snapshot instead.
 private struct PreviewTarget: Identifiable {
     let id: Int
-    let members: [PhotoFingerprint]
-    let index: Int
+    let groups: [DuplicateGroup]
+    let startGroupIndex: Int
+    let startMemberIndex: Int
 }
