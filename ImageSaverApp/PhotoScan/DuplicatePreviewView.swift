@@ -650,11 +650,32 @@ final class PreviewImageLoader: ObservableObject {
     /// Bumped by anything that ends interest in the current request, so a late
     /// callback from the previous page cannot paint over this one.
     private var token = 0
+    /// The last few full-quality bitmaps this screen has actually finished
+    /// loading, most-recently-used last. Flipping back and forth between a
+    /// couple of photos to compare them used to throw the just-loaded image
+    /// away and re-fetch it from scratch every time -- a black flash on
+    /// every return trip even between only two photos -- since `load`
+    /// unconditionally discarded whatever it held whenever the identifier
+    /// changed. Capped at 3 (the current page plus one either side, matching
+    /// how many pages the fullscreen viewer prefetches) so this never grows
+    /// into the "hold every image" design this app deliberately avoids.
+    private var cache: [String: UIImage] = [:]
+    private var cacheOrder: [String] = []
+    private let cacheLimit = 3
 
     func load(_ wanted: String, target: CGSize) {
         guard wanted != identifier else { return }
-        cancel()
+        cancelRequest()
         identifier = wanted
+        failure = nil
+        downloadFraction = nil
+
+        if let cached = cache[wanted] {
+            image = cached
+            remember(wanted)
+            return
+        }
+        image = nil
 
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [wanted],
                                               options: nil).firstObject else {
@@ -707,21 +728,43 @@ final class PreviewImageLoader: ObservableObject {
                               degraded: degraded,
                               cancelled: cancelled,
                               failed: failed,
-                              token: current)
+                              token: current,
+                              identifier: wanted)
             }
         }
     }
 
-    func cancel() {
+    /// Stops whatever is in flight without touching the cache -- used both
+    /// at the top of `load` (a new page superseding an old request) and by
+    /// `cancel` below.
+    private func cancelRequest() {
         token += 1
         if let requestID {
             PHImageManager.default().cancelImageRequest(requestID)
         }
         requestID = nil
+    }
+
+    /// Called when the fullscreen viewer itself closes -- releases every
+    /// cached bitmap, not just the one on screen, since nothing needs to
+    /// survive past this screen's lifetime.
+    func cancel() {
+        cancelRequest()
         identifier = nil
         image = nil
         failure = nil
         downloadFraction = nil
+        cache.removeAll()
+        cacheOrder.removeAll()
+    }
+
+    private func remember(_ identifier: String) {
+        cacheOrder.removeAll { $0 == identifier }
+        cacheOrder.append(identifier)
+        while cacheOrder.count > cacheLimit {
+            let evicted = cacheOrder.removeFirst()
+            cache.removeValue(forKey: evicted)
+        }
     }
 
     private func updateProgress(_ fraction: Double, failure text: String?, token: Int) {
@@ -738,7 +781,8 @@ final class PreviewImageLoader: ObservableObject {
                          degraded: Bool,
                          cancelled: Bool,
                          failed: Bool,
-                         token: Int) {
+                         token: Int,
+                         identifier: String) {
         guard token == self.token else { return }
         // A degraded image is still worth showing: it is the difference between
         // a placeholder and the photograph while iCloud is still sending.
@@ -747,6 +791,10 @@ final class PreviewImageLoader: ObservableObject {
 
         downloadFraction = nil
         requestID = nil
+        if !degraded, !cancelled, !failed, let final = image {
+            cache[identifier] = final
+            remember(identifier)
+        }
         if image == nil && !cancelled {
             failure = "この写真を読み込めませんでした"
         }
