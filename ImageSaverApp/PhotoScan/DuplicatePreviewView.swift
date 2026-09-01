@@ -144,6 +144,14 @@ struct DuplicatePreviewView: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: indexDisplayMode))
+        // Changing the page count and the selection in the same update left
+        // this stuck showing the rejected group's photo no matter how long a
+        // delay was inserted between the two -- delaying only ever changed
+        // *when* the conflicting update happened, not that a rebuilt-in-place
+        // TabView(.page) still failed to pick it up. Rebuilding the whole
+        // view (the same fix already used for the filmstrip below) sidesteps
+        // that instead of trying to outrun it.
+        .id(groups.map(\.id))
     }
 
     /// Spelled out rather than written inline: a ternary inside `.page(...)`
@@ -351,19 +359,6 @@ struct DuplicatePreviewView: View {
                     onClose()
                     return
                 }
-                // TabView(.page) asked to shrink its page count and move the
-                // selection in the same state update does not reliably
-                // repaint on iOS 15 -- the strip and the pager both sit
-                // frozen on the rejected group until something else forces a
-                // re-layout. A single Task.yield() was enough on its own, but
-                // stopped being enough once the filmstrip's own full rebuild
-                // (its .id(...) above) landed in the same frame -- the extra
-                // render work pushed the selection change past whatever
-                // window UIPageViewController was actually watching for it.
-                // An explicit delay is cruder but survives that kind of
-                // render-cost drift; 0.15s is short enough not to read as a
-                // pause.
-                try? await Task.sleep(nanoseconds: 150_000_000)
                 if let targetGroupID,
                    let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
                     index = newPage
