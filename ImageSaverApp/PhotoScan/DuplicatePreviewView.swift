@@ -50,6 +50,12 @@ struct DuplicatePreviewView: View {
     /// actually removed from `groups` once the rejection is confirmed; see
     /// `rejectAndAdvance`.
     @State private var hiddenGroupIDs: Set<Int> = []
+    /// Center of the filmstrip's display window (see `filmstripWindow`) --
+    /// only moved when a swipe carries `index` outside the current window,
+    /// not on every swipe, so ordinary browsing never reshuffles the strip's
+    /// `ForEach` and the smooth per-swipe `scrollTo` below keeps working
+    /// exactly as before.
+    @State private var filmstripWindowCenter: Int
 
     private var pages: [Page] {
         groups.flatMap { group in group.displayOrder.map { Page(groupID: group.id, member: $0) } }
@@ -70,6 +76,7 @@ struct DuplicatePreviewView: View {
         let memberCount = groups.indices.contains(groupIndex) ? groups[groupIndex].displayOrder.count : 0
         flat += min(max(startMemberIndex, 0), max(memberCount - 1, 0))
         _index = State(initialValue: flat)
+        _filmstripWindowCenter = State(initialValue: flat)
     }
 
     var body: some View {
@@ -101,11 +108,17 @@ struct DuplicatePreviewView: View {
             loadCurrent()
             prefetchNeighbors()
         }
-        .onChange(of: index) { _ in
+        .onChange(of: index) { newIndex in
             scale = 1
             lastScale = 1
             loadCurrent()
             prefetchNeighbors()
+            // Recenters only when a swipe actually leaves the current
+            // window -- ordinary browsing stays within it, so the strip's
+            // `ForEach` set (and the smooth scrollTo below) is untouched.
+            if !filmstripWindow.contains(newIndex) {
+                filmstripWindowCenter = newIndex
+            }
         }
         // The one bitmap this screen holds goes back when it closes. Nothing
         // else in the app keeps a full size image around -- the prefetch
@@ -240,26 +253,46 @@ struct DuplicatePreviewView: View {
         }
     }
 
+    /// How many pages either side of `filmstripWindowCenter` the strip ever
+    /// builds tiles for. Jumping straight to a page deep in a long run of
+    /// groups (opening the last group of a library with thousands of
+    /// photos, say) used to make the strip's initial `scrollTo` realize
+    /// every tile between the very first page and that one -- each a real
+    /// `AssetThumbnail` starting its own Photos fetch -- which is what made
+    /// opening a far-off group visibly heavy and stuttery. Generous enough
+    /// that ordinary browsing (a run of swipes in one sitting) essentially
+    /// never reaches the edge and forces a recenter.
+    private let filmstripWindowRadius = 150
+
+    private var filmstripWindow: Range<Int> {
+        let lower = max(0, filmstripWindowCenter - filmstripWindowRadius)
+        let upper = min(pages.count, filmstripWindowCenter + filmstripWindowRadius + 1)
+        return lower..<max(lower, upper)
+    }
+
     /// Every group's tiles followed by its own "≠", with a divider between
     /// one group's run and the next -- built fresh from `groups` each time
     /// `body` re-renders, which is exactly when a rejection may have removed
-    /// one and this needs to look different anyway.
+    /// one and this needs to look different anyway. Restricted to groups
+    /// that overlap `filmstripWindow`; a group is never split partway
+    /// through, so its "≠" tile and the divider after it stay attached to
+    /// the run of photos they belong to.
     ///
     /// A group in `hiddenGroupIDs` contributes no tiles at all -- pressed
     /// "≠" but not yet confirmed by `scanner.reject` -- while still being
     /// walked for its page count, so the numbering here never drifts from
     /// `pages`, which does not know about `hiddenGroupIDs` at all.
     private var filmstripItems: [FilmstripItem] {
+        let window = filmstripWindow
         var items: [FilmstripItem] = []
         var pageIndex = 0
         for (offset, group) in groups.enumerated() {
-            guard !hiddenGroupIDs.contains(group.id) else {
-                pageIndex += group.displayOrder.count
-                continue
-            }
-            for member in group.displayOrder {
-                items.append(.photo(pageIndex: pageIndex, member: member))
-                pageIndex += 1
+            let groupPageCount = group.displayOrder.count
+            defer { pageIndex += groupPageCount }
+            guard !hiddenGroupIDs.contains(group.id) else { continue }
+            guard (pageIndex..<(pageIndex + groupPageCount)).overlaps(window) else { continue }
+            for (memberOffset, member) in group.displayOrder.enumerated() {
+                items.append(.photo(pageIndex: pageIndex + memberOffset, member: member))
             }
             items.append(.reject(groupID: group.id))
             if offset < groups.count - 1 { items.append(.divider(afterGroupID: group.id)) }
