@@ -273,7 +273,23 @@ struct DuplicatePreviewView: View {
                             proxy.scrollTo(moved, anchor: .center)
                         }
                     }
+                    // The .id(...) below tears this whole scroll view down
+                    // and rebuilds it on every rejection, which resets the
+                    // scroll offset to the leading edge -- onAppear puts it
+                    // back on the current page instead of leaving the user
+                    // looking at the start of the strip.
+                    .onAppear {
+                        proxy.scrollTo(index, anchor: .center)
+                    }
                 }
+                // A rejection changes which groups exist, not just which
+                // page is selected -- LazyHStack reused the tiles from
+                // before the removal rather than redrawing them, so the
+                // strip sat frozen on the rejected group even once the main
+                // photo had already moved on. Keying the whole scroll view
+                // to the current lineup forces SwiftUI to throw the stale
+                // one away instead of trying to patch it in place.
+                .id(groups.map(\.id))
             }
             .frame(height: 68)
             .background(Color.black.opacity(0.45))
