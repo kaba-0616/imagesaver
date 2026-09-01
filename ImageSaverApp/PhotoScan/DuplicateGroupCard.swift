@@ -16,6 +16,7 @@ struct DuplicateGroupCard: View {
     let number: Int
     let selected: Set<String>
     let details: [String: AssetDetail]
+    let thumbnailGeneration: Int
     let showsCheckboxes: Bool
     let onToggle: (String) -> Void
     let onSelectGroup: () -> Void
@@ -159,7 +160,7 @@ struct DuplicateGroupCard: View {
         let identifier = member.localIdentifier
         let chosen = selected.contains(identifier)
         return VStack(spacing: 3) {
-            AssetThumbnail(identifier: identifier, side: side)
+            AssetThumbnail(identifier: identifier, side: side, generation: thumbnailGeneration)
                 .cornerRadius(6)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)

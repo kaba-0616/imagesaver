@@ -103,6 +103,11 @@ final class DuplicateScanner: ObservableObject {
     /// switching to the duplicate tab afterward needs its own way to notice
     /// nothing has been computed for it yet.
     private(set) var hasIdenticalResult = false
+    /// Bumped every time a regroup lands new results, regardless of kind.
+    /// `AssetThumbnail` folds this into its fetch key so a photo edited in
+    /// Photos between scans gets its thumbnail refetched the next time a
+    /// regroup completes, without the app trying to detect the edit itself.
+    private(set) var thumbnailGeneration = 0
     /// Kept here rather than in the view so that nothing can survive in it
     /// that is no longer on screen. Every path that replaces `groups` prunes
     /// it, which is what stops a photo the user cannot see from being counted
@@ -734,6 +739,7 @@ final class DuplicateScanner: ObservableObject {
         guard token == groupToken else { return }
         replaceGroups(kind: .identical, with: result)
         hasIdenticalResult = true
+        thumbnailGeneration += 1
 
         let photos = result.reduce(0) { $0 + $1.members.count }
         log("照合(\(note)/重複): \(milliseconds)ms / \(result.count)組\(photos)枚 / 棄却\(rejectionCount(in: .identical))組")
@@ -757,6 +763,7 @@ final class DuplicateScanner: ObservableObject {
                               newCropCacheKey: CropCacheKey, note: String) {
         guard token == groupToken else { return }
         hasSimilarResult = true
+        thumbnailGeneration += 1
         cropCache = result.cropCache
         cropCacheKey = newCropCacheKey
         if !result.cropReused { Self.storeCropShare(cropMS: result.cropMS, totalMS: milliseconds) }

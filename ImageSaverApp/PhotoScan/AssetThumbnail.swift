@@ -8,8 +8,15 @@ import Photos
 struct AssetThumbnail: View {
     let identifier: String
     let side: CGFloat
+    /// Bumped by `DuplicateScanner` each time a regroup lands new results --
+    /// the only signal this view has that the asset behind `identifier`
+    /// might have been edited in Photos since the last fetch. Folded into
+    /// the `.task(id:)` key below so a regroup forces a refetch without
+    /// needing to detect the edit itself.
+    let generation: Int
 
     @State private var image: UIImage?
+    @State private var loadedGeneration: Int?
 
     var body: some View {
         ZStack {
@@ -22,13 +29,14 @@ struct AssetThumbnail: View {
         }
         .frame(width: side, height: side)
         .clipped()
-        .task(id: identifier) {
-            guard image == nil else { return }
+        .task(id: "\(identifier)#\(generation)") {
+            guard loadedGeneration != generation else { return }
             let scale = UIScreen.main.scale
             let target = CGSize(width: side * scale, height: side * scale)
             for await candidate in AssetThumbnailLoader.images(for: identifier, target: target) {
                 image = candidate
             }
+            loadedGeneration = generation
         }
     }
 }

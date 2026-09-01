@@ -435,6 +435,7 @@ struct DuplicateFinderView: View {
             number: number,
             selected: scanner.selected,
             details: scanner.details,
+            thumbnailGeneration: scanner.thumbnailGeneration,
             showsCheckboxes: showsCheckboxes,
             onToggle: { identifier in scanner.toggle(identifier) },
             onSelectGroup: { scanner.selectGroupButBest(group) },
