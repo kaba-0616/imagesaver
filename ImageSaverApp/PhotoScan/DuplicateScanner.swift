@@ -610,6 +610,20 @@ final class DuplicateScanner: ObservableObject {
         rejections.count(for: kind)
     }
 
+    /// Called after a background prefetch in the fullscreen viewer delivers
+    /// a non-degraded image for `identifier` -- the asset may have just
+    /// finished downloading from iCloud, so the cheap, synchronous KVC check
+    /// this reruns can now come back `true` where it previously came back
+    /// `false`, letting the grid's cloud badge disappear without a fresh
+    /// scan.
+    func refreshLocalAvailability(_ identifier: String) {
+        guard details[identifier]?.isLocallyAvailable != true else { return }
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier],
+                                              options: nil).firstObject else { return }
+        guard AssetDetailReader.detail(of: asset).isLocallyAvailable == true else { return }
+        details[identifier]?.isLocallyAvailable = true
+    }
+
     func clearRejections(kind: DuplicateGroup.Kind) async -> RejectOutcome {
         let before = rejections.count(for: kind)
         switch await rejections.removeAll(kind: kind) {

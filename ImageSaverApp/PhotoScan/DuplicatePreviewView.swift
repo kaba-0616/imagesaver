@@ -33,13 +33,6 @@ struct DuplicatePreviewView: View {
     let onClose: () -> Void
 
     @StateObject private var loader = PreviewImageLoader()
-    /// Prefetches the pages around `index` into Photos' own image cache so
-    /// swiping to one already has a decoded result waiting. This never adds
-    /// to what the app itself holds -- `loader.image` is still the only
-    /// bitmap this screen keeps -- Photos' cache is bounded and evicted
-    /// under memory pressure on its own, unlike an array of `UIImage` this
-    /// view would have to size and empty itself.
-    private let prefetchManager = PHCachingImageManager()
     @State private var index: Int
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
@@ -115,11 +108,9 @@ struct DuplicatePreviewView: View {
             prefetchNeighbors()
         }
         // The one bitmap this screen holds goes back when it closes. Nothing
-        // else in the app keeps a full size image around.
-        .onDisappear {
-            loader.cancel()
-            prefetchManager.stopCachingImagesForAllAssets()
-        }
+        // else in the app keeps a full size image around -- the prefetch
+        // below never holds one either, so there is nothing else to release.
+        .onDisappear { loader.cancel() }
     }
 
     /// Swipe down to return to the grid, the same gesture the system Photos
@@ -535,10 +526,16 @@ struct DuplicatePreviewView: View {
 
     /// Warms Photos' own cache for the pages around `index` -- two either
     /// side, since swiping back to compare against an earlier photo is as
-    /// likely here as swiping forward. Network access stays off: this is a
-    /// speculative warm-up, not something the user asked to see, so it
-    /// should never spend their cellular data the way `loadCurrent()`'s own
-    /// request (network allowed) is allowed to for the page actually shown.
+    /// likely here as swiping forward. A plain one-shot `requestImage` per
+    /// neighbor, not `PHCachingImageManager`: the manager has no completion
+    /// callback, so there would be no way to notice a cloud-only asset just
+    /// finished downloading and clear its badge in the grid. The delivered
+    /// image itself is discarded immediately -- this app still never holds
+    /// more than the one bitmap `loader` keeps for the page on screen -- and
+    /// nothing here needs releasing when the view closes, since nothing is
+    /// retained beyond the request itself. Network access is allowed, same
+    /// as `loadCurrent()`'s own request: the download this kicks off for a
+    /// cloud-only photo is the whole point of prefetching it early.
     private func prefetchNeighbors() {
         let neighborIndices = [index - 2, index - 1, index + 1, index + 2]
             .filter { pages.indices.contains($0) }
@@ -546,15 +543,28 @@ struct DuplicatePreviewView: View {
         let identifiers = neighborIndices.map { pages[$0].member.localIdentifier }
 
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
-        var toCache: [PHAsset] = []
-        assets.enumerateObjects { asset, _, _ in toCache.append(asset) }
-        guard !toCache.isEmpty else { return }
+        var byIdentifier: [String: PHAsset] = [:]
+        assets.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
+        guard !byIdentifier.isEmpty else { return }
 
         let options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
-        options.isNetworkAccessAllowed = false
-        prefetchManager.startCachingImages(for: toCache, targetSize: targetSize,
-                                           contentMode: .aspectFit, options: options)
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+        let size = targetSize
+
+        for identifier in identifiers {
+            guard let asset = byIdentifier[identifier] else { continue }
+            PHImageManager.default().requestImage(for: asset, targetSize: size,
+                                                  contentMode: .aspectFit,
+                                                  options: options) { _, info in
+                let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                guard !degraded else { return }
+                Task { @MainActor in
+                    scanner.refreshLocalAvailability(identifier)
+                }
+            }
+        }
     }
 
     /// Screen sized, in pixels. Enough that the picture is sharp at 1x and
