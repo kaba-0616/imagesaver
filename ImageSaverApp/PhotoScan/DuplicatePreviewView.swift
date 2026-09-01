@@ -144,14 +144,6 @@ struct DuplicatePreviewView: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: indexDisplayMode))
-        // Changing the page count and the selection in the same update left
-        // this stuck showing the rejected group's photo no matter how long a
-        // delay was inserted between the two -- delaying only ever changed
-        // *when* the conflicting update happened, not that a rebuilt-in-place
-        // TabView(.page) still failed to pick it up. Rebuilding the whole
-        // view (the same fix already used for the filmstrip below) sidesteps
-        // that instead of trying to outrun it.
-        .id(groups.map(\.id))
     }
 
     /// Spelled out rather than written inline: a ternary inside `.page(...)`
@@ -348,23 +340,44 @@ struct DuplicatePreviewView: View {
     private func rejectAndAdvance(_ groupID: Int) {
         guard let removedIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
         let group = groups[removedIndex]
+        let removedCount = group.displayOrder.count
         Task {
             let outcome = await scanner.reject(group)
             switch outcome {
             case .done, .listChanged:
                 let targetGroupID = groups[(removedIndex + 1)...].first?.id
                     ?? groups[..<removedIndex].last?.id
-                groups.remove(at: removedIndex)
-                if groups.isEmpty {
-                    onClose()
+                guard let targetGroupID,
+                      // Found against the *current* pages -- the rejected
+                      // group is still in it at this point.
+                      let oldTargetPage = pages.firstIndex(where: { $0.groupID == targetGroupID })
+                else {
+                    groups.remove(at: removedIndex)
+                    if groups.isEmpty { onClose() } else { index = min(index, pages.count - 1) }
                     return
                 }
-                if let targetGroupID,
-                   let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
-                    index = newPage
-                } else {
-                    index = min(index, pages.count - 1)
-                }
+
+                // Moving the selection and shrinking the page count in the
+                // same update is what left the main photo frozen on the
+                // rejected group no matter how long a delay separated the
+                // two writes (a rebuilt-in-place TabView(.page) never
+                // reliably picked either up), and rebuilding the whole
+                // TabView via .id(...) traded that for a different iOS 15
+                // TabView(.page) bug -- the freshly built view not painting
+                // its first page until a manual swipe forced it to. Landing
+                // the selection first, while the page count is still what it
+                // was, is a change TabView(.page) already handles correctly
+                // on its own; only once that has settled is the group
+                // actually removed, and by then the selected page's content
+                // does not change (same photo, its index just shifts down),
+                // so the second update never asks it to do both at once
+                // either.
+                index = oldTargetPage
+                try? await Task.sleep(nanoseconds: 200_000_000)
+
+                let shift = oldTargetPage > removedIndex ? removedCount : 0
+                groups.remove(at: removedIndex)
+                index = max(0, min(oldTargetPage - shift, pages.count - 1))
             case .busy, .groupTooLarge, .storeFull, .failed:
                 let shown = outcome.describe(success: nil)
                 toast = shown
