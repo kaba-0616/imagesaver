@@ -33,10 +33,33 @@ struct AssetThumbnail: View {
             guard loadedGeneration != generation else { return }
             let scale = UIScreen.main.scale
             let target = CGSize(width: side * scale, height: side * scale)
-            for await candidate in AssetThumbnailLoader.images(for: identifier, target: target) {
-                image = candidate
+
+            // Network access stays off here (see AssetThumbnailLoader), so a
+            // cloud-only asset Photos hasn't cached anything for yet simply
+            // yields nothing before the 8s deadline. That used to still get
+            // silently retried whenever this tile's view happened to be torn
+            // down and rebuilt (scrolling off-screen and back, say) -- but
+            // now that identity is kept stable on purpose (to stop
+            // unrelated tiles flashing gray on a rejection), a tile that
+            // fails once would otherwise stay blank forever. Retrying with
+            // backoff here, for as long as this tile stays on screen, is
+            // what catches the asset once it does become locally available
+            // some other way (the user opened it fullscreen, say, which
+            // does allow network access and downloads the original).
+            var delay: UInt64 = 3_000_000_000
+            while !Task.isCancelled {
+                var received = false
+                for await candidate in AssetThumbnailLoader.images(for: identifier, target: target) {
+                    image = candidate
+                    received = true
+                }
+                if received {
+                    loadedGeneration = generation
+                    return
+                }
+                try? await Task.sleep(nanoseconds: delay)
+                delay = min(delay * 2, 60_000_000_000)
             }
-            loadedGeneration = generation
         }
     }
 }
