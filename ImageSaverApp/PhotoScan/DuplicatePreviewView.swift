@@ -41,6 +41,15 @@ struct DuplicatePreviewView: View {
     /// limit, a failed write) has nowhere else to surface on this fullscreen
     /// screen, so it gets this instead of the grid's inline message text.
     @State private var toast: String?
+    /// Groups hidden from the filmstrip the instant "≠" is pressed, before
+    /// `scanner.reject` has even been asked -- `pages` (what the pager's
+    /// page count is derived from) deliberately does not consult this, so
+    /// pressing "≠" only ever changes `index`(a plain selection change) as
+    /// far as the pager is concerned, while the filmstrip (which does
+    /// consult this) updates in the very same instant. The group is only
+    /// actually removed from `groups` once the rejection is confirmed; see
+    /// `rejectAndAdvance`.
+    @State private var hiddenGroupIDs: Set<Int> = []
 
     private var pages: [Page] {
         groups.flatMap { group in group.displayOrder.map { Page(groupID: group.id, member: $0) } }
@@ -230,10 +239,19 @@ struct DuplicatePreviewView: View {
     /// one group's run and the next -- built fresh from `groups` each time
     /// `body` re-renders, which is exactly when a rejection may have removed
     /// one and this needs to look different anyway.
+    ///
+    /// A group in `hiddenGroupIDs` contributes no tiles at all -- pressed
+    /// "≠" but not yet confirmed by `scanner.reject` -- while still being
+    /// walked for its page count, so the numbering here never drifts from
+    /// `pages`, which does not know about `hiddenGroupIDs` at all.
     private var filmstripItems: [FilmstripItem] {
         var items: [FilmstripItem] = []
         var pageIndex = 0
         for (offset, group) in groups.enumerated() {
+            guard !hiddenGroupIDs.contains(group.id) else {
+                pageIndex += group.displayOrder.count
+                continue
+            }
             for member in group.displayOrder {
                 items.append(.photo(pageIndex: pageIndex, member: member))
                 pageIndex += 1
@@ -282,14 +300,14 @@ struct DuplicatePreviewView: View {
                         proxy.scrollTo(index, anchor: .center)
                     }
                 }
-                // A rejection changes which groups exist, not just which
-                // page is selected -- LazyHStack reused the tiles from
-                // before the removal rather than redrawing them, so the
-                // strip sat frozen on the rejected group even once the main
-                // photo had already moved on. Keying the whole scroll view
-                // to the current lineup forces SwiftUI to throw the stale
-                // one away instead of trying to patch it in place.
-                .id(groups.map(\.id))
+                // A rejection changes which groups exist (or, the instant
+                // "≠" is pressed, which are hidden) -- LazyHStack reused the
+                // tiles from before rather than redrawing them, so the strip
+                // sat frozen on the rejected group. Keying the whole scroll
+                // view to the current lineup, hidden groups included, forces
+                // SwiftUI to throw the stale one away instead of trying to
+                // patch it in place.
+                .id([groups.map(\.id), Array(hiddenGroupIDs).sorted()])
             }
             .frame(height: 68)
             .background(Color.black.opacity(0.45))
@@ -340,35 +358,49 @@ struct DuplicatePreviewView: View {
     private func rejectAndAdvance(_ groupID: Int) {
         guard let removedIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
         let group = groups[removedIndex]
+        let targetGroupID = groups[(removedIndex + 1)...].first?.id
+            ?? groups[..<removedIndex].last?.id
+        let previousIndex = index
+
+        // Instant, together: TabView(.page) only ever reliably repaints a
+        // change to *either* its page count or its selection in one update,
+        // never both -- every earlier attempt that changed `groups` and
+        // `index` at once (or staggered them a beat apart) either froze the
+        // main photo or made the filmstrip visibly lag behind it. Hiding the
+        // group here leaves `pages` (what backs the pager) untouched, so
+        // from TabView's point of view this is a plain selection change,
+        // while the filmstrip -- which reads `hiddenGroupIDs` directly --
+        // updates in the very same instant.
+        hiddenGroupIDs.insert(groupID)
+        if let targetGroupID, let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
+            index = newPage
+        } else {
+            index = min(index, max(pages.count - 1, 0))
+        }
+        let onlyGroupLeft = groups.count == 1
+
         Task {
             let outcome = await scanner.reject(group)
             switch outcome {
             case .done, .listChanged:
-                let targetGroupID = groups[(removedIndex + 1)...].first?.id
-                    ?? groups[..<removedIndex].last?.id
-                // Splitting this into "move the selection" then, after a
-                // delay, "shrink the page count" (build99-102) did land
-                // correctly, but it made the filmstrip visibly happen in two
-                // separate beats -- scroll ahead, then a moment later the
-                // rejected group's tiles vanish and it re-centers. What
-                // actually left TabView(.page) frozen in the first place was
-                // an *animated* transition trying to change the selection
-                // and the data source at once; turning the animation off for
-                // this one update is the direct fix, and it lets both
-                // changes land together again as a single instant swap.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    groups.remove(at: removedIndex)
-                    if let targetGroupID,
-                       let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
-                        index = newPage
-                    } else {
-                        index = min(index, max(pages.count - 1, 0))
-                    }
-                }
-                if groups.isEmpty { onClose() }
+                // Nothing the user can see changes from here on -- the photo
+                // already on screen and the strip's tiles are already
+                // correct -- so folding the hide into a real removal is just
+                // bookkeeping. Re-finding `index` by the photo it currently
+                // points at (rather than doing arithmetic on the old
+                // position) keeps this correct even if the user swiped
+                // elsewhere during the round trip.
+                let currentPage = pages[index]
+                groups.remove(at: removedIndex)
+                hiddenGroupIDs.remove(groupID)
+                index = pages.firstIndex(where: {
+                    $0.groupID == currentPage.groupID
+                        && $0.member.localIdentifier == currentPage.member.localIdentifier
+                }) ?? min(index, max(pages.count - 1, 0))
+                if onlyGroupLeft { onClose() }
             case .busy, .groupTooLarge, .storeFull, .failed:
+                hiddenGroupIDs.remove(groupID)
+                index = previousIndex
                 let shown = outcome.describe(success: nil)
                 toast = shown
                 try? await Task.sleep(nanoseconds: 3_000_000_000)

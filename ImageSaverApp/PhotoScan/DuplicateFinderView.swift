@@ -42,14 +42,16 @@ struct DuplicateFinderView: View {
             .onChange(of: scanner.level) { value in levelDisplay = Double(value) }
             .onChange(of: tab) { newTab in
                 message = nil
-                // Similar is no longer computed automatically after a scan --
-                // it is the expensive pass, and starting it before anyone had
-                // looked at this tab read, on device, as an unprompted
-                // re-scan. This is the one place it gets kicked off instead:
-                // the first time the tab is actually opened.
-                guard newTab == .similar, !scanner.hasSimilarResult,
-                      scanner.phase == .ready, scanner.regrouping == nil else { return }
-                scanner.regroup(note: "類似タブを開いた", kind: .similar)
+                // Whichever tab the initial scan wasn't told to compute
+                // (`DuplicateScanner.scan(initialKind:)`) -- and the similar
+                // tab always, since it is the expensive pass and starting it
+                // before anyone had looked at it read, on device, as an
+                // unprompted re-scan -- is left uncomputed until its own tab
+                // is actually opened. This is the one place either gets
+                // kicked off.
+                let hasResult = newTab == .similar ? scanner.hasSimilarResult : scanner.hasIdenticalResult
+                guard !hasResult, scanner.phase == .ready, scanner.regrouping == nil else { return }
+                scanner.regroup(note: "\(newTab.tabLabel)タブを開いた", kind: newTab)
             }
             // The log is gathered rather than written line by line, so leaving
             // the screen is one of the points it has to be pushed out at.
@@ -178,8 +180,12 @@ struct DuplicateFinderView: View {
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
             if scanner.access == .limited { limitedNotice }
-            Button("調べる") { scanner.scan() }
-                .buttonStyle(.borderedProminent)
+            HStack(spacing: 12) {
+                Button("重複を調べる") { startScan(.identical) }
+                    .buttonStyle(.borderedProminent)
+                Button("類似を調べる") { startScan(.similar) }
+                    .buttonStyle(.borderedProminent)
+            }
             Text("写真は読み取るだけです。削除はこの後の画面で選んだものだけ、iOSの確認を挟んでから行われます。")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -192,6 +198,14 @@ struct DuplicateFinderView: View {
             logRow
         }
         .padding(32)
+    }
+
+    /// Both the start screen's two buttons and "もう一度調べる" go through
+    /// this -- picking a kind here is also picking which tab lands in front
+    /// of the user once the scan's results actually show up.
+    private func startScan(_ kind: DuplicateGroup.Kind) {
+        tab = kind
+        scanner.scan(initialKind: kind)
     }
 
     private var limitedNotice: some View {
@@ -554,7 +568,7 @@ struct DuplicateFinderView: View {
     /// copying it out of here.
     private var footer: some View {
         VStack(spacing: 8) {
-            Button("もう一度調べる") { scanner.scan() }
+            Button("もう一度調べる") { startScan(tab) }
                 .font(.caption2)
         }
         .frame(maxWidth: .infinity)

@@ -98,6 +98,11 @@ final class DuplicateScanner: ObservableObject {
     /// started automatically after a scan -- this is what the view checks to
     /// decide whether opening the similar tab needs to kick it off.
     private(set) var hasSimilarResult = false
+    /// Same idea as `hasSimilarResult`, for the duplicate tab -- a scan
+    /// started with `initialKind: .similar` skips this pass entirely, so
+    /// switching to the duplicate tab afterward needs its own way to notice
+    /// nothing has been computed for it yet.
+    private(set) var hasIdenticalResult = false
     /// Kept here rather than in the view so that nothing can survive in it
     /// that is no longer on screen. Every path that replaces `groups` prunes
     /// it, which is what stops a photo the user cannot see from being counted
@@ -288,11 +293,20 @@ final class DuplicateScanner: ObservableObject {
 
     // MARK: - Scan
 
-    func scan() {
+    /// `initialKind` is which tab's grouping runs the moment the scan's
+    /// fingerprints land -- the other tab is left uncomputed until its own
+    /// tab is opened, the same lazy path the similar tab already used before
+    /// this existed. Read only by `finishScan`, which runs well after this
+    /// returns, so it has to be stored rather than passed along a closure
+    /// chain that crosses an `@Sendable` boundary onto a background queue.
+    private var pendingInitialKind: DuplicateGroup.Kind = .identical
+
+    func scan(initialKind: DuplicateGroup.Kind = .identical) {
         switch phase {
         case .counting, .scanning, .grouping: return
         case .idle, .ready: break
         }
+        pendingInitialKind = initialKind
         phase = .counting
         // Anything still being grouped belongs to the list this scan replaces.
         // Without this a grouping that lands mid-scan sets .ready, which takes
@@ -670,9 +684,10 @@ final class DuplicateScanner: ObservableObject {
 
     private func finishScan(_ outcome: ScanOutcome) {
         fingerprints = outcome.prints
-        // Whatever the similar tab showed was computed from the fingerprints
-        // just replaced -- it no longer describes this library.
+        // Whatever either tab showed was computed from the fingerprints just
+        // replaced -- neither one describes this library anymore.
         hasSimilarResult = false
+        hasIdenticalResult = false
         scanReport = "\(outcome.total)枚を走査 \(outcome.milliseconds)ms"
         if outcome.reused > 0 { scanReport += " (再利用\(outcome.reused)枚)" }
         log("走査完了: 対象\(outcome.total)枚 / 再利用\(outcome.reused)枚 / 新規\(outcome.computed)枚 / \(outcome.milliseconds)ms / メモリ\(outcome.memoryMB)MB")
@@ -692,10 +707,13 @@ final class DuplicateScanner: ObservableObject {
         phase = .grouping(fraction: 0, remaining: nil)
         // Similar is the expensive pass (100+ seconds on a large library at a
         // loose level) and starting it before the user has even looked at the
-        // similar tab read, on device, as an unprompted re-scan. Duplicate is
-        // cheap and worth showing immediately; similar waits for the tab to
-        // actually be opened (see `DuplicateFinderView`'s tab watcher).
-        regroup(note: "走査後の照合", kind: .identical)
+        // similar tab read, on device, as an unprompted re-scan. Duplicate
+        // used to be computed unconditionally here because it is cheap, but
+        // a user who only cares about one tab still had to wait through it
+        // either way -- `initialKind` is which one actually gets to run now;
+        // the other tab waits for the tab to actually be opened (see
+        // `DuplicateFinderView`'s tab watcher).
+        regroup(note: "走査後の照合", kind: pendingInitialKind)
     }
 
     private func updateGrouping(fraction: Double, remaining: TimeInterval?, token: Int) {
@@ -715,6 +733,7 @@ final class DuplicateScanner: ObservableObject {
                                 isLast: Bool, note: String) {
         guard token == groupToken else { return }
         replaceGroups(kind: .identical, with: result)
+        hasIdenticalResult = true
 
         let photos = result.reduce(0) { $0 + $1.members.count }
         log("照合(\(note)/重複): \(milliseconds)ms / \(result.count)組\(photos)枚 / 棄却\(rejectionCount(in: .identical))組")
