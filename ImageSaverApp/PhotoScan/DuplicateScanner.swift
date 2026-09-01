@@ -622,6 +622,7 @@ final class DuplicateScanner: ObservableObject {
                                               options: nil).firstObject else { return }
         guard AssetDetailReader.detail(of: asset).isLocallyAvailable == true else { return }
         details[identifier]?.isLocallyAvailable = true
+        log("先読みでiCloudから取得済みに: \(identifier)")
     }
 
     func clearRejections(kind: DuplicateGroup.Kind) async -> RejectOutcome {
