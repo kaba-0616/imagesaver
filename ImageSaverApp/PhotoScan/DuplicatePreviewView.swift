@@ -355,10 +355,15 @@ struct DuplicatePreviewView: View {
                 // selection in the same state update does not reliably
                 // repaint on iOS 15 -- the strip and the pager both sit
                 // frozen on the rejected group until something else forces a
-                // re-layout. Letting the page-count change land on its own
-                // first is what makes the selection change afterward actually
-                // take.
-                await Task.yield()
+                // re-layout. A single Task.yield() was enough on its own, but
+                // stopped being enough once the filmstrip's own full rebuild
+                // (its .id(...) above) landed in the same frame -- the extra
+                // render work pushed the selection change past whatever
+                // window UIPageViewController was actually watching for it.
+                // An explicit delay is cruder but survives that kind of
+                // render-cost drift; 0.15s is short enough not to read as a
+                // pause.
+                try? await Task.sleep(nanoseconds: 150_000_000)
                 if let targetGroupID,
                    let newPage = pages.firstIndex(where: { $0.groupID == targetGroupID }) {
                     index = newPage
