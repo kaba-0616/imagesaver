@@ -244,9 +244,21 @@ struct DuplicatePreviewView: View {
         case reject(groupID: Int)
         case divider(afterGroupID: Int)
 
+        // Identity is the photo itself, never `pageIndex` -- a group ahead
+        // of this one being hidden or actually removed shifts every later
+        // page's number, and an id that moved with it made ForEach treat
+        // the tile as a brand new view, throwing away the `AssetThumbnail`
+        // it already had a decoded image in and flashing gray while it
+        // re-fetched. `pageIndex` is still carried as data for the tap
+        // target below; it just isn't part of what makes a tile "the same
+        // tile" from one render to the next.
+        /// Shared with the scrollTo targets below, so a lookup by identifier
+        /// always lands on the same string this case's `id` produces.
+        static func photoID(_ identifier: String) -> String { "photo-\(identifier)" }
+
         var id: String {
             switch self {
-            case .photo(let pageIndex, let member): return "photo-\(pageIndex)-\(member.localIdentifier)"
+            case .photo(_, let member): return Self.photoID(member.localIdentifier)
             case .reject(let groupID): return "reject-\(groupID)"
             case .divider(let groupID): return "divider-\(groupID)"
             }
@@ -325,8 +337,10 @@ struct DuplicatePreviewView: View {
                         .frame(minWidth: geometry.size.width, alignment: .center)
                     }
                     .onChange(of: index) { moved in
+                        guard pages.indices.contains(moved) else { return }
+                        let target = FilmstripItem.photoID(pages[moved].member.localIdentifier)
                         withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo(moved, anchor: .center)
+                            proxy.scrollTo(target, anchor: .center)
                         }
                     }
                     // The .id(...) below tears this whole scroll view down
@@ -335,17 +349,27 @@ struct DuplicatePreviewView: View {
                     // back on the current page instead of leaving the user
                     // looking at the start of the strip.
                     .onAppear {
-                        proxy.scrollTo(index, anchor: .center)
+                        guard pages.indices.contains(index) else { return }
+                        proxy.scrollTo(FilmstripItem.photoID(pages[index].member.localIdentifier),
+                                       anchor: .center)
                     }
                 }
-                // A rejection changes which groups exist (or, the instant
-                // "≠" is pressed, which are hidden) -- LazyHStack reused the
-                // tiles from before rather than redrawing them, so the strip
-                // sat frozen on the rejected group. Keying the whole scroll
-                // view to the current lineup, hidden groups included, forces
-                // SwiftUI to throw the stale one away instead of trying to
-                // patch it in place.
-                .id([groups.map(\.id), Array(hiddenGroupIDs).sorted()])
+                // A rejection changes which groups exist -- LazyHStack reused
+                // the tiles from before rather than redrawing them, so the
+                // strip sat frozen on the rejected group. Keying the whole
+                // scroll view to the current lineup forces SwiftUI to throw
+                // the stale one away instead of trying to patch it in place.
+                //
+                // Deliberately *not* keyed on `hiddenGroupIDs`: that flips
+                // the instant "≠" is pressed, and doing the same full
+                // teardown there discarded every tile's already-loaded
+                // `AssetThumbnail` image along with the hidden one's, flashing
+                // the whole strip gray. `filmstripItems` already drops the
+                // hidden group's tiles on its own -- ForEach's normal diffing
+                // (now that each `FilmstripItem.photo`'s id is the photo
+                // itself, not its shifting page number) removes just those
+                // without disturbing anything else.
+                .id(groups.map(\.id))
             }
             .frame(height: 68)
             .background(Color.black.opacity(0.45))
@@ -370,7 +394,12 @@ struct DuplicatePreviewView: View {
                 .opacity(current ? 1 : 0.5)
                 .contentShape(Rectangle())
                 .onTapGesture { index = pageIndex }
-                .id(pageIndex)
+                // Same id `ForEach` already knows this tile by (see
+                // `FilmstripItem.id`) -- keeping the two in sync is what
+                // lets `scrollTo` below target this tile by the photo it
+                // shows rather than by a page number that shifts under a
+                // rejection.
+                .id(item.id)
         case .reject(let groupID):
             Button {
                 rejectAndAdvance(groupID)
