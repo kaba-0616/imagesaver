@@ -56,6 +56,15 @@ struct DuplicatePreviewView: View {
     /// `ForEach` and the smooth per-swipe `scrollTo` below keeps working
     /// exactly as before.
     @State private var filmstripWindowCenter: Int
+    /// Which way the last real page change went, tracked so "≠" can carry
+    /// the pager onward in that same direction. Rejecting a run of groups
+    /// while swiping backward through them (browsing from the end of a
+    /// long tab toward the front, say) used to always land on the group
+    /// *after* the removed one regardless -- forward, against the direction
+    /// being swiped -- so the position visibly lurched forward and had to
+    /// be swiped back past again on every single rejection.
+    @State private var browseDirection = 1
+    @State private var lastKnownIndex: Int
 
     private var pages: [Page] {
         groups.flatMap { group in group.displayOrder.map { Page(groupID: group.id, member: $0) } }
@@ -77,6 +86,7 @@ struct DuplicatePreviewView: View {
         flat += min(max(startMemberIndex, 0), max(memberCount - 1, 0))
         _index = State(initialValue: flat)
         _filmstripWindowCenter = State(initialValue: flat)
+        _lastKnownIndex = State(initialValue: flat)
     }
 
     var body: some View {
@@ -109,6 +119,10 @@ struct DuplicatePreviewView: View {
             prefetchNeighbors()
         }
         .onChange(of: index) { newIndex in
+            if newIndex != lastKnownIndex {
+                browseDirection = newIndex > lastKnownIndex ? 1 : -1
+                lastKnownIndex = newIndex
+            }
             scale = 1
             lastScale = 1
             loadCurrent()
@@ -180,13 +194,26 @@ struct DuplicatePreviewView: View {
     }
 
     /// Only the page in front of the user draws a photo. The ones either side
-    /// stay black on purpose: holding three full size images to make a swipe
-    /// look smoother is exactly the trade this app exists to avoid.
+    /// stay black unless `loader` already happens to have a bitmap cached for
+    /// them -- which, thanks to the small LRU cache below and the neighbor
+    /// warm-up in `prefetchNeighbors`, the immediate neighbor usually does.
+    /// `TabView(.page)` composites the current and adjacent pages live during
+    /// an interactive drag, not a snapshot, so this is what turns "the next
+    /// photo slides in from black" into "the next photo is already sitting
+    /// there, like the system Photos app" -- without holding more bitmaps at
+    /// once than the cache already bounds.
     @ViewBuilder
     private func page(at offset: Int) -> some View {
         ZStack {
             Color.black
-            if offset == index { currentPhoto }
+            if offset == index {
+                currentPhoto
+            } else if pages.indices.contains(offset),
+                      let neighbor = loader.image(for: pages[offset].member.localIdentifier) {
+                Image(uiImage: neighbor)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -426,8 +453,15 @@ struct DuplicatePreviewView: View {
     private func rejectAndAdvance(_ groupID: Int) {
         guard let removedIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
         let group = groups[removedIndex]
-        let targetGroupID = groups[(removedIndex + 1)...].first?.id
-            ?? groups[..<removedIndex].last?.id
+        // Whichever direction the user was actually swiping wins -- rejecting
+        // a run of groups while browsing backward through them should keep
+        // heading backward, not lurch forward to "the next one" every time
+        // just because that used to be the only direction tried first.
+        let forwardTarget = groups[(removedIndex + 1)...].first?.id
+        let backwardTarget = groups[..<removedIndex].last?.id
+        let targetGroupID = browseDirection < 0
+            ? (backwardTarget ?? forwardTarget)
+            : (forwardTarget ?? backwardTarget)
         let previousIndex = index
 
         // Instant, together: TabView(.page) only ever reliably repaints a
@@ -627,6 +661,17 @@ struct DuplicatePreviewView: View {
                 }
             }
         }
+
+        // The immediate neighbor only (±1, matching how much room the LRU
+        // cache below actually has beyond the current page) also gets
+        // warmed directly into `loader`'s own cache, at the same target size
+        // `currentPhoto` displays at -- not the smaller one above -- so the
+        // interactive drag has an actual bitmap to composite instead of
+        // black the moment the user's finger starts moving, rather than
+        // waiting for the swipe to settle and `loadCurrent` to catch up.
+        for adjacent in [index - 1, index + 1] where pages.indices.contains(adjacent) {
+            loader.warm(pages[adjacent].member.localIdentifier, target: targetSize)
+        }
     }
 
     /// Screen sized, in pixels. Enough that the picture is sharp at 1x and
@@ -691,6 +736,43 @@ final class PreviewImageLoader: ObservableObject {
     private var cache: [String: UIImage] = [:]
     private var cacheOrder: [String] = []
     private let cacheLimit = 3
+
+    /// A read-only peek at the cache -- never triggers a fetch. Lets the
+    /// pager paint a neighboring page's actual photo (when it happens to
+    /// already be cached) instead of leaving it black while the page next
+    /// to the current one is on screen during an interactive swipe.
+    func image(for identifier: String) -> UIImage? {
+        cache[identifier]
+    }
+
+    /// Fetches straight into the cache without touching `image`,
+    /// `identifier`, or `failure` -- those describe the page actually on
+    /// screen, and a neighbor being warmed in the background must not
+    /// interrupt or race with whatever `load` is doing for the current one.
+    /// A no-op if the cache already has it or it's what's currently showing
+    /// (which `load` itself keeps current in the cache already).
+    func warm(_ wanted: String, target: CGSize) {
+        guard cache[wanted] == nil, wanted != identifier else { return }
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [wanted],
+                                              options: nil).firstObject else { return }
+
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.resizeMode = .exact
+        options.isNetworkAccessAllowed = true
+        PHImageManager.default().requestImage(
+            for: asset, targetSize: target, contentMode: .aspectFit, options: options
+        ) { [weak self] image, info in
+            guard let image else { return }
+            let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+            guard !degraded else { return }
+            Task { @MainActor in
+                guard let self, self.cache[wanted] == nil else { return }
+                self.cache[wanted] = image
+                self.remember(wanted)
+            }
+        }
+    }
 
     func load(_ wanted: String, target: CGSize) {
         guard wanted != identifier else { return }
