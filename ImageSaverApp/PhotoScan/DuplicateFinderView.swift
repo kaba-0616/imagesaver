@@ -374,7 +374,12 @@ struct DuplicateFinderView: View {
                         footer
                     }
                     .padding(16)
-                    .frame(minHeight: proxy.size.height, alignment: .center)
+                    // Centering (via the Spacers above) is only meant for the
+                    // empty state -- with real groups this same minHeight frame
+                    // was centering a short list (down to the last one group)
+                    // vertically instead of leaving it pinned to the top.
+                    .frame(minHeight: proxy.size.height,
+                           alignment: visibleGroups.isEmpty ? .center : .top)
                 }
             }
         }
