@@ -5,6 +5,29 @@ import UniformTypeIdentifiers
 
 final class ActionViewController: UIViewController {
 
+    /// `completeRequest` must run exactly once no matter how this screen
+    /// closes. The "閉じる" button called it directly and nothing else did --
+    /// swiping the sheet down (the standard gesture for any modally presented
+    /// screen, and nothing here disables it) skipped that call entirely,
+    /// which `RunOutcome`'s own doc comment already names as the exact
+    /// failure mode that gets an extension quietly dropped from the share
+    /// sheet: a run that never marks itself finished reads to iOS the same
+    /// as one that was killed. `viewDidDisappear` below is the fallback for
+    /// every path that isn't the button.
+    private var hasFinished = false
+
+    private func finish() {
+        guard !hasFinished else { return }
+        hasFinished = true
+        RunOutcome.note("正常終了")
+        extensionContext?.completeRequest(returningItems: nil)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        finish()
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -26,8 +49,7 @@ final class ActionViewController: UIViewController {
             loading.removeFromParent()
 
             let close: () -> Void = { [weak self] in
-                RunOutcome.note("正常終了")
-                self?.extensionContext?.completeRequest(returningItems: nil)
+                self?.finish()
             }
 
             let hosting: UIHostingController<AnyView>
