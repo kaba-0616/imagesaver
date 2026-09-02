@@ -574,6 +574,28 @@ enum DuplicateGrouper {
             for index in indices where croppedIndices.contains(index) {
                 cropped.insert(prints[index].localIdentifier)
             }
+            // Ranking-only, and only for a similar group already small enough
+            // that a pairwise walk costs nothing: `cropMatches` above only
+            // ever compares same-width pairs across the whole library, so a
+            // crop that also changed the overall scale (a resize alongside
+            // the trim, or a crop off all four sides rather than just top
+            // and bottom) never reaches `croppedIndices` at all. Every pair
+            // here is already agreed to be the same picture by whatever put
+            // them in this group -- this only ever decides which one of
+            // them `order(_:croppedIdentifiers:)` puts last, never whether
+            // they belong together.
+            if onlyKind == .similar, indices.count > 1, indices.count <= scaledCropGroupCap {
+                for a in 0..<(indices.count - 1) {
+                    for b in (a + 1)..<indices.count {
+                        let idA = prints[indices[a]].localIdentifier
+                        let idB = prints[indices[b]].localIdentifier
+                        guard !cropped.contains(idA) || !cropped.contains(idB) else { continue }
+                        if let croppedID = scaledCropVictim(prints[indices[a]], prints[indices[b]]) {
+                            cropped.insert(croppedID)
+                        }
+                    }
+                }
+            }
             groups.append(DuplicateGroup(id: root,
                                          kind: onlyKind,
                                          members: order(members, croppedIdentifiers: cropped),
@@ -815,6 +837,128 @@ enum DuplicateGrouper {
         let window = rowA.subdata(in: base..<(base + rowB.count))
         guard variance(of: window) >= cropMinVariance else { return false }
         return a.fine.distance(to: b.fine) <= cropFineHashGate
+    }
+
+    // MARK: - Crop detection (scaled, ranking-only)
+
+    /// A group past this size never runs the pairwise search below -- real
+    /// libraries keep similar-groups to a handful of members (five or so);
+    /// anything far past that is already the kind of runaway cluster this
+    /// file's history treats as a bug in the matching that formed it, not a
+    /// group worth spending O(n²) profile comparisons on.
+    private static let scaledCropGroupCap = 12
+    /// How well a resampled crop profile has to fit somewhere inside the
+    /// full one, same 0...1 scale as `cropRowMatch`. Slightly stricter: this
+    /// search also tries every candidate scale, which gives it more chances
+    /// to stumble onto a coincidentally-decent fit than the fixed-scale
+    /// search above ever gets.
+    private static let scaledCropMinScore = 0.94
+    private static let scaledCropMinVariance: Double = 200
+    private static let scaledCropFineHashGate = 200
+    /// The narrowest a crop's content is ever assumed to have been trimmed
+    /// to, as a fraction of the full picture's extent along one axis. Below
+    /// this a "crop" is almost certainly two different photos that happen to
+    /// share a subject and a colour palette.
+    private static let scaledCropMinScale = 0.3
+
+    /// One axis' best (scale, offset, score): `full`'s profile is searched at
+    /// every candidate scale for where a resampled `crop` fits best. Unlike
+    /// `bestCropOffset` above, this allows `crop`'s content to have also been
+    /// resized, not just cut -- resampling to each candidate window length
+    /// is what stands in for the resize.
+    private struct AxisFit {
+        let scale: Double
+        let offset: Double
+        let score: Double
+    }
+
+    private static func bestAxisFit(full: Data, crop: Data) -> AxisFit? {
+        let fullBytes = [UInt8](full)
+        let cropBytes = [UInt8](crop)
+        guard fullBytes.count >= 4, cropBytes.count >= 4 else { return nil }
+
+        var best: AxisFit?
+        let steps = 24
+        for step in 0...steps {
+            let scale = scaledCropMinScale
+                + (1 - scaledCropMinScale) * Double(step) / Double(steps)
+            let windowLength = max(4, Int((Double(fullBytes.count) * scale).rounded()))
+            guard windowLength <= fullBytes.count else { continue }
+            let resampled = resample(cropBytes, to: windowLength)
+
+            let span = fullBytes.count - windowLength
+            for offset in 0...span {
+                var total = 0
+                for k in 0..<windowLength {
+                    total += abs(Int(fullBytes[offset + k]) - Int(resampled[k]))
+                }
+                let score = 1 - (Double(total) / Double(windowLength) / 255)
+                if best == nil || score > best!.score {
+                    best = AxisFit(scale: scale,
+                                   offset: Double(offset) / Double(fullBytes.count),
+                                   score: score)
+                }
+            }
+        }
+        return best
+    }
+
+    /// Linear interpolation to an arbitrary length -- `colProfile` is always
+    /// 32 samples and `rowProfile`'s count depends on the photo's own aspect
+    /// ratio, so two photos' profiles are almost never the same length to
+    /// begin with, before any resize is even considered.
+    private static func resample(_ bytes: [UInt8], to length: Int) -> [UInt8] {
+        guard bytes.count != length else { return bytes }
+        guard bytes.count > 1, length > 0 else { return bytes }
+        var out = [UInt8](repeating: 0, count: length)
+        let scale = Double(bytes.count - 1) / Double(max(length - 1, 1))
+        for i in 0..<length {
+            let position = Double(i) * scale
+            let low = Int(position)
+            let high = min(low + 1, bytes.count - 1)
+            let fraction = position - Double(low)
+            let value = Double(bytes[low]) * (1 - fraction) + Double(bytes[high]) * fraction
+            out[i] = UInt8(max(0, min(255, value.rounded())))
+        }
+        return out
+    }
+
+    /// Two members of an already-formed similar group, checked for a crop
+    /// relationship neither the hash pass nor `cropMatches` above needed to
+    /// notice -- both already agree these are "the same picture". Column and
+    /// row axes are searched independently (a crop-then-resize is fully
+    /// described by an independent horizontal scale/offset and vertical
+    /// scale/offset -- the picture's content does not enter into either axis
+    /// on its own), so a plain top/bottom trim is just the special case
+    /// where the horizontal fit comes back at scale 1, offset 0.
+    ///
+    /// Returns the cropped member's identifier, or nil if no direction fits.
+    private static func scaledCropVictim(_ a: PhotoFingerprint, _ b: PhotoFingerprint) -> String? {
+        guard let colA = a.colProfile, let rowA = a.rowProfile,
+              let colB = b.colProfile, let rowB = b.rowProfile else { return nil }
+        guard a.fine.distance(to: b.fine) <= scaledCropFineHashGate else { return nil }
+
+        func fits(full: (col: Data, row: Data), crop: (col: Data, row: Data)) -> Bool {
+            guard let colFit = bestAxisFit(full: full.col, crop: crop.col),
+                  let rowFit = bestAxisFit(full: full.row, crop: crop.row) else { return false }
+            guard colFit.score >= scaledCropMinScore, rowFit.score >= scaledCropMinScore else { return false }
+            // Both axes should agree, roughly, on how much smaller the crop's
+            // content is -- one axis near full scale and the other far from
+            // it is what a coincidental match against a flat or repetitive
+            // background looks like, not a real crop.
+            guard abs(colFit.scale - rowFit.scale) <= 0.25 else { return false }
+
+            let fullRowBytes = [UInt8](full.row)
+            let windowLength = max(4, Int((Double(fullRowBytes.count) * rowFit.scale).rounded()))
+            let offset = min(max(0, Int((rowFit.offset * Double(fullRowBytes.count)).rounded())),
+                             max(0, fullRowBytes.count - windowLength))
+            let window = Data(fullRowBytes[offset..<min(fullRowBytes.count, offset + windowLength)])
+            return variance(of: window) >= scaledCropMinVariance
+        }
+
+        if fits(full: (colA, rowA), crop: (colB, rowB)) { return b.localIdentifier }
+        if fits(full: (colB, rowB), crop: (colA, rowA)) { return a.localIdentifier }
+        return nil
     }
 
     /// `static` rather than `private`: the largest-group diagnostic log in
