@@ -370,33 +370,34 @@ struct DuplicatePreviewView: View {
                             proxy.scrollTo(target, anchor: .center)
                         }
                     }
-                    // The .id(...) below tears this whole scroll view down
-                    // and rebuilds it on every rejection, which resets the
-                    // scroll offset to the leading edge -- onAppear puts it
-                    // back on the current page instead of leaving the user
-                    // looking at the start of the strip.
+                    // Restores the scroll position on the first appearance
+                    // of this screen (there is no other reason for the
+                    // offset to need resetting now that nothing below forces
+                    // this view to be rebuilt).
                     .onAppear {
                         guard pages.indices.contains(index) else { return }
                         proxy.scrollTo(FilmstripItem.photoID(pages[index].member.localIdentifier),
                                        anchor: .center)
                     }
                 }
-                // A rejection changes which groups exist -- LazyHStack reused
-                // the tiles from before rather than redrawing them, so the
-                // strip sat frozen on the rejected group. Keying the whole
-                // scroll view to the current lineup forces SwiftUI to throw
-                // the stale one away instead of trying to patch it in place.
-                //
-                // Deliberately *not* keyed on `hiddenGroupIDs`: that flips
-                // the instant "≠" is pressed, and doing the same full
-                // teardown there discarded every tile's already-loaded
-                // `AssetThumbnail` image along with the hidden one's, flashing
-                // the whole strip gray. `filmstripItems` already drops the
-                // hidden group's tiles on its own -- ForEach's normal diffing
-                // (now that each `FilmstripItem.photo`'s id is the photo
-                // itself, not its shifting page number) removes just those
-                // without disturbing anything else.
-                .id(groups.map(\.id))
+                // No `.id(...)` on this container -- there used to be one
+                // keyed on `groups.map(\.id)`, added back when a rejection
+                // reliably left LazyHStack showing stale tiles unless the
+                // whole scroll view was torn down and rebuilt. That staleness
+                // traced back to `FilmstripItem.photo`'s id embedding
+                // `pageIndex`: removing a group shifted every later page's
+                // number, which changed every later tile's id at once and
+                // was what LazyHStack handled badly. Now that identity is the
+                // photo itself (see `FilmstripItem.id`) a real removal
+                // doesn't touch any surviving tile's id at all -- `groups`
+                // shrinking just drops the (already hidden, already
+                // invisible) rejected tiles from `filmstripItems`, which
+                // ForEach's ordinary diffing handles the same way it already
+                // does for `hiddenGroupIDs`. Forcing a full rebuild here on
+                // top of that only bought back the exact gray flash the
+                // `hiddenGroupIDs` exclusion from `.id(...)` was written to
+                // avoid, moved to land a beat later once `scanner.reject`
+                // actually confirms.
             }
             .frame(height: 68)
             .background(Color.black.opacity(0.45))
