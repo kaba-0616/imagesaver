@@ -7,13 +7,12 @@ import Photos
 /// instead of stopping there.
 ///
 /// Pinch to zoom, drag to pan once zoomed in, double tap to come back.
-/// TabView's own paging swipe and a DragGesture of our own would otherwise
-/// fight over the same finger -- `pager` turns paging off outright while
-/// zoomed via `.scrollDisabled` (iOS 16+ only, applied through
-/// `ScrollDisabledIfAvailable` below since the deployment target stays at
-/// iOS 15), and the pan gesture in `currentPhoto` is masked to `.subviews`
-/// (effectively absent) below that, so the two are never both live for the
-/// same touch.
+/// TabView's paging and a DragGesture of our own fight over the same finger on
+/// iOS 15 with no reliable way to say which should win (`.scrollDisabled`,
+/// the clean fix, is iOS 16) -- worked around in `currentPhoto` by masking
+/// the pan gesture to `.subviews` (effectively absent) whenever the photo is
+/// at 1x, so the pager's own swipe is never contested except while actually
+/// zoomed in.
 struct DuplicatePreviewView: View {
 
     @ObservedObject var scanner: DuplicateScanner
@@ -195,15 +194,6 @@ struct DuplicatePreviewView: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: indexDisplayMode))
-        // Deployment target stays at iOS 15 (AltStore's free-account signing
-        // step fails on an iOS 16-targeted build -- see build118/119), but
-        // every device this app actually runs on is far newer, so guarding
-        // the iOS 16+ API at runtime still gets us "turn the pager's own
-        // swipe off outright while zoomed in" instead of the two gestures
-        // fighting over the same touch on real devices. Falls back to the
-        // `GestureMask` masking alone below iOS 16, which is what this app
-        // shipped with before this API was available.
-        .modifier(ScrollDisabledIfAvailable(disabled: scale > 1.01))
     }
 
     /// Spelled out rather than written inline: a ternary inside `.page(...)`
@@ -245,12 +235,16 @@ struct DuplicatePreviewView: View {
                 .aspectRatio(contentMode: .fit)
                 .scaleEffect(scale)
                 .offset(panOffset)
-                // `pager`'s own `.scrollDisabled(scale > 1.01)` stops it from
-                // swiping pages while zoomed in, but that alone does not stop
-                // this `DragGesture` from being recognized *alongside* the
-                // pager's while at 1x -- masking it to `.subviews` (making it
-                // effectively not exist) whenever not zoomed is what actually
-                // keeps ordinary page swiping free of any competition.
+                // `including:` (a `GestureMask`) is what makes this coexist
+                // with `TabView`'s own paging swipe on iOS 15 -- `.gesture`
+                // alone would have this and the pager's internal one-finger
+                // recognizer fighting over the same touch with no reliable
+                // way to say which should win (`.scrollDisabled`, the clean
+                // fix, is iOS 16+). Masked to `.subviews` while at 1x, this
+                // drag recognizer does not exist as far as the pager is
+                // concerned, so ordinary swiping between photos is completely
+                // unaffected; only once zoomed in does it switch to `.all`
+                // and start claiming the touch for panning instead.
                 .gesture(
                     DragGesture()
                         .onChanged { value in
@@ -952,24 +946,6 @@ final class PreviewImageLoader: ObservableObject {
         }
         if image == nil && !cancelled {
             failure = "この写真を読み込めませんでした"
-        }
-    }
-}
-
-/// `.scrollDisabled` needs iOS 16, but the deployment target stays at iOS 15
-/// (AltStore's free-account signing step fails on an iOS 16-targeted
-/// archive). Every real device this app runs on is well past iOS 16, so this
-/// just applies the modifier at runtime when available and leaves `pager`
-/// untouched otherwise -- the `GestureMask` masking on the pan gesture is
-/// what covered this before the API was available, and still does below 16.
-private struct ScrollDisabledIfAvailable: ViewModifier {
-    let disabled: Bool
-
-    func body(content: Content) -> some View {
-        if #available(iOS 16.0, *) {
-            content.scrollDisabled(disabled)
-        } else {
-            content
         }
     }
 }
