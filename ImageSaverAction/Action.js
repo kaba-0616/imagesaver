@@ -51,6 +51,15 @@ Action.prototype = {
         // instead made every post by this author look like the current one.
         var POST_PATH = /(?:^|\/)(?:p|reel|reels|tv)\/([^\/?#]+)/i;
 
+        // A diary entry's own page (sakurazaka46/hinatazaka46) carries a
+        // widget of other members' latest entries, each a small portrait
+        // thumbnail served through the same resize endpoint as this page's
+        // own photos -- upgraded to full size like anything else, they fill
+        // the grid with faces from posts the user never opened. Unlike
+        // Instagram's shortcode, this URL has no alias form, so a plain
+        // pathname comparison is enough; no need for pageKey's segment logic.
+        var DIARY_DETAIL_PATH = /\/diary\/detail\/\d+/i;
+
         /// What page a path names. Two paths for the same post agree; anything
         /// below it (/p/<code>/media) agrees too.
         function pageKey(pathname) {
@@ -76,16 +85,24 @@ Action.prototype = {
             return POST_PATH.test(document.location.pathname);
         }
 
-        /// Confined to the carousel sites: elsewhere a thumbnail that links to
-        /// its own page is ordinary gallery markup and wanted.
+        /// Confined to the carousel sites and the diary-widget sites:
+        /// elsewhere a thumbnail that links to its own page is ordinary
+        /// gallery markup and wanted.
         function linksElsewhere(el) {
-            if (!hostWalksCarousels() || !onPostPermalink()) { return false; }
+            var onDiaryDetail = hostHasMemberWidget()
+                && DIARY_DETAIL_PATH.test(document.location.pathname);
+            var onCarouselPost = hostWalksCarousels() && onPostPermalink();
+            if (!onDiaryDetail && !onCarouselPost) { return false; }
             var link;
             try { link = el.closest("a[href]"); } catch (e) { return false; }
             if (!link || !link.href) { return false; }
             var target;
             try { target = new URL(link.href, document.baseURI); } catch (e) { return false; }
             if (target.origin !== document.location.origin) { return true; }
+            if (onDiaryDetail) {
+                return target.pathname.replace(/\/+$/, "")
+                    !== document.location.pathname.replace(/\/+$/, "");
+            }
             return pageKey(target.pathname) !== thisPageKey;
         }
 
@@ -507,6 +524,19 @@ Action.prototype = {
             return false;
         }
 
+        var MEMBER_WIDGET_HOSTS = ["sakurazaka46.com", "hinatazaka46.com"];
+
+        function hostHasMemberWidget() {
+            var host = (document.location.hostname || "").toLowerCase();
+            for (var i = 0; i < MEMBER_WIDGET_HOSTS.length; i++) {
+                var allowed = MEMBER_WIDGET_HOSTS[i];
+                if (host === allowed || host.slice(-(allowed.length + 1)) === "." + allowed) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         function startingSlideIndex() {
             var match = /[?&]img_index=(\d+)/.exec(document.URL);
             return match ? parseInt(match[1], 10) : 1;
@@ -692,6 +722,11 @@ Action.prototype = {
                 note("別の投稿へのリンク内の画像: "
                      + (onPostPermalink() ? otherPosts + "件"
                                           : "判定なし (投稿ページではないため)"));
+            } else if (hostHasMemberWidget()) {
+                note("他メンバーの日記へのリンク内の画像: "
+                     + (DIARY_DETAIL_PATH.test(document.location.pathname)
+                        ? otherPosts + "件"
+                        : "判定なし (日記詳細ページではないため)"));
             }
             var breakdown = [];
             for (var key in bySource) {

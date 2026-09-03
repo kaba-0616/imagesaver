@@ -23,9 +23,12 @@ function El(tag, attrs = {}, opts = {}) {
         naturalWidth: opts.nw || 0, naturalHeight: opts.nh || 0,
         currentSrc: attrs.src || "", src: attrs.src || "",
         shadowRoot: null,
+        // opts.link: the href of an <a> this element is nested inside, for
+        // linksElsewhere's el.closest("a[href]") -- there is no real DOM tree
+        // here, so the wrapping anchor is faked rather than actually nested.
         getAttribute(n) { return n in this.attrs ? this.attrs[n] : null; },
         getBoundingClientRect() { return this.rect; },
-        closest() { return null; },
+        closest(sel) { return opts.link && sel === "a[href]" ? { href: opts.link } : null; },
         querySelectorAll() { return []; }
     };
 }
@@ -131,6 +134,38 @@ function checkPlistSafe(payload) {
           !!dup && /750_750/.test(dup.rendered || ""), dup && dup.rendered);
     check("ロゴは書き換えない",
           !byURL["https://sakurazaka46.com/files/14/s46/img/logo.svg"].rendered);
+}
+
+// ---------------------------------------------------------------------------
+// A diary entry's own page (sakurazaka46/hinatazaka46): a "他のメンバーの
+// 日記" widget of small portrait thumbnails, each linking to a different
+// member's diary entry, must not have its photos upgraded and kept alongside
+// this entry's own -- they resolve through the same resize endpoint, so
+// nothing about size or URL tells them apart, only the link target.
+// ---------------------------------------------------------------------------
+{
+    const H = "https://sakurazaka46.com/images/14";
+    const els = [
+        // This entry's own photo, not wrapped in any link.
+        El("img", { src: `${H}/f0c/2640108dd382a555036b1443cfdde/1200_1200_102400.jpg` },
+           { rect: { width: 1200, height: 800 } }),
+        // The widget: a different member's entry, wrapped in a link to that
+        // entry's own detail page.
+        El("img", { src: `${H}/ccf/7167e7a550f4f7abd2f5329fe94d2/60_60_102400.jpg` },
+           { rect: { width: 60, height: 60 },
+             link: "https://sakurazaka46.com/s/s46/diary/detail/70664" })
+    ];
+    const p = run("https://sakurazaka46.com/s/s46/diary/detail/70663?ima=0000", els);
+    console.log("\n日記詳細ページ(他メンバーの日記ウィジェットあり):");
+    p.trace.forEach(t => console.log("       " + t));
+    checkPlistSafe(p);
+
+    const byURL = Object.fromEntries(p.images.map(i => [i.url, i]));
+    const own = byURL[`${H}/f0c/2640108dd382a555036b1443cfdde.jpg`];
+    const widget = byURL[`${H}/ccf/7167e7a550f4f7abd2f5329fe94d2.jpg`];
+    check("自分の投稿の写真はdom扱いのまま", !!own && own.origin !== "other", own && own.origin);
+    check("他メンバーの日記へのリンク内の写真はother扱いになる",
+          !!widget && widget.origin === "other", widget && widget.origin);
 }
 
 // ---------------------------------------------------------------------------
