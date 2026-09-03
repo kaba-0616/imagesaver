@@ -9,7 +9,7 @@ Mac不要・Windowsだけでビルド〜インストールまで完結する構�
 
 1. このリポジトリをGitHubにpushする
 2. GitHub Actions がクラウド上のMacで自動ビルドし、未署名の `ImageSaver.ipa` を作成する
-3. **AltStore** で、無料のApple IDを使いその場署名してiPhone/iPadにインストールする
+3. **3uTools** で、無料のApple IDを使いその場署名してiPhone/iPadにインストールする
 4. Safariの共有シートでImageSaverを有効化する
 
 Xcodeのインストールや操作は一切不要です。
@@ -17,7 +17,7 @@ Xcodeのインストールや操作は一切不要です。
 > **重要: Sideloadlyは使わないこと**
 > Sideloadly(v0.60時点)はiOS 26の拡張機能の署名に対応しておらず、アプリ本体は起動できても
 > 共有シートから拡張機能を呼び出した瞬間に `CODESIGNING / Invalid Page` で強制終了します
-> (クラッシュログすら残らないこともある)。AltStoreを使えば正常に動作します。
+> (クラッシュログすら残らないこともある)。3uToolsを使えば正常に動作します。
 
 ---
 
@@ -45,33 +45,39 @@ pushすると自動的に `.github/workflows/build.yml` が実行されます。
 
 コードを修正したら、再度pushすれば自動的に再ビルドされます(`workflow_dispatch` にも対応しているので、Actionsタブから手動で「Run workflow」も可能です)。
 
-## 3. AltStoreでインストールする
+## 3. 3uToolsでインストールする
 
-### 初回のみ: AltServer / AltStore のセットアップ
+2026-09まではAltStore/AltServerを使っていたが、認証まわりで原因不明の
+不具合(`NSCocoaErrorDomain 3840`、「The data couldn't be read...」)が
+発生し、VPNなど何を試しても解消しなかったため**3uToolsに乗り換えた**。
+拡張機能を含めて正常に動作することを確認済み。
 
-1. [Apple公式サイト](https://www.apple.com/itunes/)からiTunesとiCloudをインストールする
-   (**Microsoft Store版では動作しない**。既にStore版が入っている場合はアンインストールしてから入れ直す)
-2. [AltServer](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows) をダウンロードし、`AltInstaller.zip` を展開して `AltInstaller.msi` を実行
-3. iPhoneをUSB接続し、iTunesを開いて **「Wi-Fi経由でこのiPhoneと同期」にチェックを入れて「適用」**
-   (これを忘れると `AltServer could not find this device` エラーになる)
-4. タスクバー通知領域のAltServerアイコンを**左クリック**(右クリックではない)→「Install AltStore」→ 端末を選択
-5. Apple IDとパスワードを入力
-6. iPhone側「設定」→「一般」→「VPNとデバイス管理」→ プロファイルを「信頼」
+### 初回のみ: 3uToolsのセットアップ
 
-### ipaをインストールする
+1. [3uTools公式サイト](https://www.3u.com/)からWindows版をダウンロード・インストール
+2. iPhoneをUSBケーブルでPCに接続し、「このコンピュータを信頼しますか」が出たら信頼する
+3. 3uToolsを起動し、iPhoneが認識されるのを待つ
 
-1. `ImageSaver.ipa` をPCの **iCloud Drive** フォルダにコピーする(iPhoneから見えるようにするため)
-2. iPhoneでAltStoreアプリを開き、「My Apps」タブ → 左上の「+」
-3. iCloud Driveから `ImageSaver.ipa` を選択
-4. **「App Contains Extensions」と聞かれたら必ず「Keep App Extensions」を選ぶ**
-   (「Remove App Extensions」を選ぶと肝心の拡張機能が入らない)
-5. インストール完了を待つ
+### ipaを署名してインストールする
+
+1. 上部メニューの「Toolbox」→「IPA Signature」を開く
+2. 右上を「Apple ID Signing」にし、「Add ID」で自分のApple IDを追加
+3. `ImageSaver.ipa` を追加し、「Sign Now」で署名する(署名後の保存先が画面下部に表示される)
+4. 3uToolsのメイン画面(デバイス情報画面)に戻り、「Apps」→「Install」
+5. 署名済みの `ImageSaver.ipa` を選んでインストール
+6. iPhone側「設定」→「一般」→「VPNとデバイス管理」→ 該当のApple IDプロファイルを「信頼」
 
 ### 無料Apple IDの制限について
 
 - インストールしたアプリは **7日間で自動的に使えなくなります**
-- AltStoreはPCでAltServerが起動していて同じWi-Fiにいれば、バックグラウンドで自動的に再署名(リフレッシュ)してくれます
-- 年99ドルのApple Developer Programに登録すると、有効期限が1年に延びます
+- 7日間で同じApple IDで署名できるのは**10個まで**(1アプリの再署名を繰り返す分には問題にならない)
+- 3uToolsにはAltServerのような自動リフレッシュ機能が無いため、**7日ごとに上記の署名・インストール手順を手動で繰り返す**必要がある
+- 年99ドルのApple Developer Programに登録すると、有効期限が1年に延びる(現在は未加入の方針)
+
+> **Sideloadlyは使わないこと**
+> Sideloadly(v0.60時点)はiOS 26の拡張機能の署名に対応しておらず、アプリ本体は起動できても
+> 共有シートから拡張機能を呼び出した瞬間に `CODESIGNING / Invalid Page` で強制終了します
+> (クラッシュログすら残らないこともある)。3uToolsを使えば正常に動作します。
 
 ## 4. Safariの共有シートでImageSaverを有効にする
 
