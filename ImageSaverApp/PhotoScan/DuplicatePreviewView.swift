@@ -7,12 +7,11 @@ import Photos
 /// instead of stopping there.
 ///
 /// Pinch to zoom, drag to pan once zoomed in, double tap to come back.
-/// TabView's paging and a DragGesture of our own fight over the same finger on
-/// iOS 15 with no reliable way to say which should win (`.scrollDisabled`,
-/// the clean fix, is iOS 16) -- worked around in `currentPhoto` by masking
-/// the pan gesture to `.subviews` (effectively absent) whenever the photo is
-/// at 1x, so the pager's own swipe is never contested except while actually
-/// zoomed in.
+/// TabView's own paging swipe and a DragGesture of our own would otherwise
+/// fight over the same finger -- `pager`'s `.scrollDisabled(scale > 1.01)`
+/// turns paging off outright while zoomed, and the pan gesture in
+/// `currentPhoto` is masked to `.subviews` (effectively absent) below that,
+/// so the two are never both live for the same touch.
 struct DuplicatePreviewView: View {
 
     @ObservedObject var scanner: DuplicateScanner
@@ -194,6 +193,12 @@ struct DuplicatePreviewView: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: indexDisplayMode))
+        // Deployment target is iOS 16+, so this can just turn the pager's
+        // own swipe off outright while zoomed in, instead of the two
+        // gestures fighting over the same touch with no reliable way to
+        // say which should win (the problem on iOS 15, which this app no
+        // longer needs to support).
+        .scrollDisabled(scale > 1.01)
     }
 
     /// Spelled out rather than written inline: a ternary inside `.page(...)`
@@ -235,16 +240,12 @@ struct DuplicatePreviewView: View {
                 .aspectRatio(contentMode: .fit)
                 .scaleEffect(scale)
                 .offset(panOffset)
-                // `including:` (a `GestureMask`) is what makes this coexist
-                // with `TabView`'s own paging swipe on iOS 15 -- `.gesture`
-                // alone would have this and the pager's internal one-finger
-                // recognizer fighting over the same touch with no reliable
-                // way to say which should win (`.scrollDisabled`, the clean
-                // fix, is iOS 16+). Masked to `.subviews` while at 1x, this
-                // drag recognizer does not exist as far as the pager is
-                // concerned, so ordinary swiping between photos is completely
-                // unaffected; only once zoomed in does it switch to `.all`
-                // and start claiming the touch for panning instead.
+                // `pager`'s own `.scrollDisabled(scale > 1.01)` stops it from
+                // swiping pages while zoomed in, but that alone does not stop
+                // this `DragGesture` from being recognized *alongside* the
+                // pager's while at 1x -- masking it to `.subviews` (making it
+                // effectively not exist) whenever not zoomed is what actually
+                // keeps ordinary page swiping free of any competition.
                 .gesture(
                     DragGesture()
                         .onChanged { value in

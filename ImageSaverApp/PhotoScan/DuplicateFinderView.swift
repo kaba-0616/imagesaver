@@ -388,7 +388,9 @@ struct DuplicateFinderView: View {
     // MARK: - Settings
 
     private var settingsSheet: some View {
-        // NavigationView, not NavigationStack: this app still supports iOS 15.
+        // NavigationView, not NavigationStack -- unrelated to the deployment
+        // target (16+ as of this comment), just not worth touching without
+        // a reason to.
         NavigationView {
             List {
                 clearSection(kind: .identical)
