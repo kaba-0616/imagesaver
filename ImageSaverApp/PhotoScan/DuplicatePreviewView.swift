@@ -8,10 +8,12 @@ import Photos
 ///
 /// Pinch to zoom, drag to pan once zoomed in, double tap to come back.
 /// TabView's own paging swipe and a DragGesture of our own would otherwise
-/// fight over the same finger -- `pager`'s `.scrollDisabled(scale > 1.01)`
-/// turns paging off outright while zoomed, and the pan gesture in
-/// `currentPhoto` is masked to `.subviews` (effectively absent) below that,
-/// so the two are never both live for the same touch.
+/// fight over the same finger -- `pager` turns paging off outright while
+/// zoomed via `.scrollDisabled` (iOS 16+ only, applied through
+/// `ScrollDisabledIfAvailable` below since the deployment target stays at
+/// iOS 15), and the pan gesture in `currentPhoto` is masked to `.subviews`
+/// (effectively absent) below that, so the two are never both live for the
+/// same touch.
 struct DuplicatePreviewView: View {
 
     @ObservedObject var scanner: DuplicateScanner
@@ -193,12 +195,15 @@ struct DuplicatePreviewView: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: indexDisplayMode))
-        // Deployment target is iOS 16+, so this can just turn the pager's
-        // own swipe off outright while zoomed in, instead of the two
-        // gestures fighting over the same touch with no reliable way to
-        // say which should win (the problem on iOS 15, which this app no
-        // longer needs to support).
-        .scrollDisabled(scale > 1.01)
+        // Deployment target stays at iOS 15 (AltStore's free-account signing
+        // step fails on an iOS 16-targeted build -- see build118/119), but
+        // every device this app actually runs on is far newer, so guarding
+        // the iOS 16+ API at runtime still gets us "turn the pager's own
+        // swipe off outright while zoomed in" instead of the two gestures
+        // fighting over the same touch on real devices. Falls back to the
+        // `GestureMask` masking alone below iOS 16, which is what this app
+        // shipped with before this API was available.
+        .modifier(ScrollDisabledIfAvailable(disabled: scale > 1.01))
     }
 
     /// Spelled out rather than written inline: a ternary inside `.page(...)`
@@ -947,6 +952,24 @@ final class PreviewImageLoader: ObservableObject {
         }
         if image == nil && !cancelled {
             failure = "この写真を読み込めませんでした"
+        }
+    }
+}
+
+/// `.scrollDisabled` needs iOS 16, but the deployment target stays at iOS 15
+/// (AltStore's free-account signing step fails on an iOS 16-targeted
+/// archive). Every real device this app runs on is well past iOS 16, so this
+/// just applies the modifier at runtime when available and leaves `pager`
+/// untouched otherwise -- the `GestureMask` masking on the pan gesture is
+/// what covered this before the API was available, and still does below 16.
+private struct ScrollDisabledIfAvailable: ViewModifier {
+    let disabled: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.scrollDisabled(disabled)
+        } else {
+            content
         }
     }
 }
