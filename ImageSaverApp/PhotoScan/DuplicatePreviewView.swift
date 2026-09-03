@@ -6,12 +6,13 @@ import Photos
 /// swiping past the last photo of one group carries straight into the next
 /// instead of stopping there.
 ///
-/// Pinch to zoom and double tap to come back; there is deliberately no pan.
+/// Pinch to zoom, drag to pan once zoomed in, double tap to come back.
 /// TabView's paging and a DragGesture of our own fight over the same finger on
-/// iOS 15, and which one wins is not something that can be settled from here --
-/// `.scrollDisabled` is iOS 16, so SwiftUI offers no way to hold the paging
-/// still while a drag is in progress. The extension's fullscreen view has run
-/// on real devices for the same reason and in the same shape.
+/// iOS 15 with no reliable way to say which should win (`.scrollDisabled`,
+/// the clean fix, is iOS 16) -- worked around in `currentPhoto` by masking
+/// the pan gesture to `.subviews` (effectively absent) whenever the photo is
+/// at 1x, so the pager's own swipe is never contested except while actually
+/// zoomed in.
 struct DuplicatePreviewView: View {
 
     @ObservedObject var scanner: DuplicateScanner
@@ -36,6 +37,12 @@ struct DuplicatePreviewView: View {
     @State private var index: Int
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
+    /// Where a zoomed-in photo has been panned to, relative to centered.
+    /// Reset alongside `scale` any time the photo goes back to fit-to-screen,
+    /// since an offset with nothing zoomed in to justify it would just push
+    /// the next photo off-center the moment a swipe changes `index`.
+    @State private var panOffset: CGSize = .zero
+    @State private var lastPanOffset: CGSize = .zero
     @State private var dragOffset: CGFloat = 0
     /// A rejection outcome that was not simply "done" (busy, over the pair
     /// limit, a failed write) has nowhere else to surface on this fullscreen
@@ -125,6 +132,8 @@ struct DuplicatePreviewView: View {
             }
             scale = 1
             lastScale = 1
+            panOffset = .zero
+            lastPanOffset = .zero
             loadCurrent()
             prefetchNeighbors()
             // Recenters only when a swipe actually leaves the current
@@ -225,19 +234,47 @@ struct DuplicatePreviewView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .scaleEffect(scale)
+                .offset(panOffset)
+                // `including:` (a `GestureMask`) is what makes this coexist
+                // with `TabView`'s own paging swipe on iOS 15 -- `.gesture`
+                // alone would have this and the pager's internal one-finger
+                // recognizer fighting over the same touch with no reliable
+                // way to say which should win (`.scrollDisabled`, the clean
+                // fix, is iOS 16+). Masked to `.subviews` while at 1x, this
+                // drag recognizer does not exist as far as the pager is
+                // concerned, so ordinary swiping between photos is completely
+                // unaffected; only once zoomed in does it switch to `.all`
+                // and start claiming the touch for panning instead.
                 .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            panOffset = CGSize(width: lastPanOffset.width + value.translation.width,
+                                               height: lastPanOffset.height + value.translation.height)
+                        }
+                        .onEnded { _ in
+                            lastPanOffset = panOffset
+                        },
+                    including: scale > 1.01 ? .all : .subviews
+                )
+                .simultaneousGesture(
                     MagnificationGesture()
                         .onChanged { value in
                             scale = max(1, min(lastScale * value, 5))
                         }
                         .onEnded { _ in
                             lastScale = scale
+                            if scale <= 1.01 {
+                                panOffset = .zero
+                                lastPanOffset = .zero
+                            }
                         }
                 )
                 .onTapGesture(count: 2) {
                     withAnimation {
                         scale = 1
                         lastScale = 1
+                        panOffset = .zero
+                        lastPanOffset = .zero
                     }
                 }
         } else if let failure = loader.failure {
