@@ -413,10 +413,16 @@ Action.prototype = {
                         }
                         continue;
                     }
+                    // The member-roster avatars turned out to be painted as
+                    // CSS backgrounds too, at a box size well past
+                    // SPRITE_MIN_BOX -- large enough to read as a real photo
+                    // by the sprite check above, but still small next to an
+                    // actual diary photo.
+                    var bgOrigin = isMemberAvatar(el) ? "other" : undefined;
                     var re = /url\(["']?([^"')]+)["']?\)/g;
                     var m;
                     while ((m = re.exec(bg)) !== null) {
-                        addURL(m[1], 0, 0);
+                        addURL(m[1], 0, 0, bgOrigin);
                     }
                 }
             }

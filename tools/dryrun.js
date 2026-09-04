@@ -158,7 +158,11 @@ function checkPlistSafe(payload) {
         // `href` does not name a different page -- only the small avatar box
         // size distinguishes it from the post's own (much larger) photos.
         El("img", { src: `${H}/9ad/b1c4b9f5e6a7c8d9e0f1a2b3c4d5e6/300_300_102400.jpg` },
-           { rect: { width: 110, height: 110 }, link: "#" })
+           { rect: { width: 110, height: 110 }, link: "#" }),
+        // The roster turned out to actually be painted as CSS backgrounds in
+        // practice, at a box past SPRITE_MIN_BOX (60) but still avatar-sized.
+        El("div", {}, { bg: `url("${H}/7bc/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c/300_300_102400.jpg")`,
+                        rect: { width: 130, height: 130 } })
     ];
     const p = run("https://sakurazaka46.com/s/s46/diary/detail/70663?ima=0000", els);
     console.log("\n日記詳細ページ(他メンバーの日記ウィジェットあり):");
@@ -169,11 +173,14 @@ function checkPlistSafe(payload) {
     const own = byURL[`${H}/f0c/2640108dd382a555036b1443cfdde.jpg`];
     const widget = byURL[`${H}/ccf/7167e7a550f4f7abd2f5329fe94d2.jpg`];
     const roster = byURL[`${H}/9ad/b1c4b9f5e6a7c8d9e0f1a2b3c4d5e6.jpg`];
+    const rosterBg = byURL[`${H}/7bc/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c.jpg`];
     check("自分の投稿の写真はdom扱いのまま", !!own && own.origin !== "other", own && own.origin);
     check("他メンバーの日記へのリンク内の写真はother扱いになる",
           !!widget && widget.origin === "other", widget && widget.origin);
-    check("メンバー別ブログのアバターはother扱いになる(サイズ判定)",
+    check("メンバー別ブログのアバター(img)はother扱いになる(サイズ判定)",
           !!roster && roster.origin === "other", roster && roster.origin);
+    check("メンバー別ブログのアバター(CSS背景)はother扱いになる(サイズ判定)",
+          !!rosterBg && rosterBg.origin === "other", rosterBg && rosterBg.origin);
 }
 
 // ---------------------------------------------------------------------------
