@@ -112,10 +112,12 @@ Action.prototype = {
         // tell these avatars apart from the post's own photos by link target.
         // Their box size can, though: the roster is always laid out as a grid
         // of small round avatars, while an actual diary photo is shown large.
-        // Raised from 220: the roster highlights whichever member's own page
-        // this is with a visibly larger avatar (plus a ring around it), which
-        // pushed its box just over the original threshold.
-        var MEMBER_AVATAR_MAX_BOX = 300;
+        // Raised from 220, then 300: the roster highlights whichever
+        // member's own page this is with a visibly larger avatar (plus a
+        // ring around it), pushing its box past both. A real diary photo
+        // still comfortably clears this on any device width, so there is
+        // room to raise it further without risking the post's own content.
+        var MEMBER_AVATAR_MAX_BOX = 420;
 
         function isMemberAvatar(el) {
             if (!hostHasMemberWidget()) { return false; }
