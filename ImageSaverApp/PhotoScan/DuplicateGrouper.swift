@@ -860,6 +860,14 @@ enum DuplicateGrouper {
     /// this a "crop" is almost certainly two different photos that happen to
     /// share a subject and a colour palette.
     private static let scaledCropMinScale = 0.3
+    /// A pair with identical framing -- the same photo re-saved at a
+    /// different JPEG quality, say -- fits itself at scale ~1 with a
+    /// near-perfect score, which satisfied every other gate here and got one
+    /// of the two branded "cropped" arbitrarily (whichever `fits` call ran
+    /// first), knocking the larger file out of first place in `order(...)`
+    /// for no real crop at all. A scale this close to 1 is "not smaller",
+    /// not "barely cropped", so it is excluded rather than just discouraged.
+    private static let scaledCropMaxScale = 0.97
 
     /// One axis' best (scale, offset, score): `full`'s profile is searched at
     /// every candidate scale for where a resampled `crop` fits best. Unlike
@@ -947,6 +955,10 @@ enum DuplicateGrouper {
             // it is what a coincidental match against a flat or repetitive
             // background looks like, not a real crop.
             guard abs(colFit.scale - rowFit.scale) <= 0.25 else { return false }
+            // A scale near 1 on both axes means "crop" fits the "full" image
+            // at essentially its own size -- indistinguishable from the same
+            // photo re-saved at a different quality, not an actual crop.
+            guard colFit.scale <= scaledCropMaxScale, rowFit.scale <= scaledCropMaxScale else { return false }
 
             let fullRowBytes = [UInt8](full.row)
             let windowLength = max(4, Int((Double(fullRowBytes.count) * rowFit.scale).rounded()))
