@@ -685,7 +685,7 @@ struct DuplicateFinderView: View {
     private var undoRow: some View {
         if scanner.canUndoRejection {
             HStack(spacing: 8) {
-                Text("1組を「違う」にしました")
+                Text("「違う」にした直近\(scanner.undoDepth)組を取り消せます")
                     .font(.footnote)
                 Spacer(minLength: 8)
                 Button("取り消す") { Task { await undoRejection() } }

@@ -122,6 +122,9 @@ final class DuplicateScanner: ObservableObject {
     /// Set when a group has just been put aside, so the view can offer one
     /// step back. Cleared by anything else that changes the list.
     @Published private(set) var canUndoRejection = false
+    /// How many rejections back "取り消す" can currently walk, for the label
+    /// above the button -- `canUndoRejection` alone only says "at least one".
+    var undoDepth: Int { undoStack.count }
 
     private var fingerprints: [PhotoFingerprint] = []
     private var scanReport = ""
@@ -132,8 +135,11 @@ final class DuplicateScanner: ObservableObject {
     /// before it is ever handed back in.
     private var cropCache: DuplicateGrouper.CropCache?
     private var cropCacheKey: CropCacheKey?
-    private var undoGroup: DuplicateGroup?
-    private var undoPosition = 0
+    /// Up to the last `maxUndoDepth` rejections, oldest first, so pressing
+    /// "取り消す" repeatedly walks back through recent decisions instead of
+    /// only ever offering the single most recent one.
+    private var undoStack: [(group: DuplicateGroup, position: Int)] = []
+    private static let maxUndoDepth = 5
     /// Per tab views of `groups`, rebuilt once whenever it changes. Read on
     /// every pass of the body -- several times over for the delete button
     /// alone -- so they cannot be walked out of `groups` each time.
@@ -550,15 +556,15 @@ final class DuplicateScanner: ObservableObject {
         groups.removeAll { $0.id == group.id }
         selected.subtract(Set(members))
         refreshGroupIndex()
-        undoGroup = group
-        undoPosition = min(position, groups.count)
+        undoStack.append((group, min(position, groups.count)))
+        if undoStack.count > Self.maxUndoDepth { undoStack.removeFirst() }
         canUndoRejection = true
         log("棄却: \(members.count)枚 (\(group.kind.label) / 代表 \(PhotoScanFormat.day(group.suggestedKeep.creationDate)))")
         return .done
     }
 
     func undoRejection() async -> RejectOutcome {
-        guard let group = undoGroup else { return .done }
+        guard let (group, undoPosition) = undoStack.last else { return .done }
         let token = groupToken
         switch await rejections.undoLast() {
         case .saved:
@@ -598,7 +604,8 @@ final class DuplicateScanner: ObservableObject {
         // precisely the state the group was taken out of.
         groups.insert(group, at: min(undoPosition, groups.count))
         refreshGroupIndex()
-        forgetUndo()
+        undoStack.removeLast()
+        canUndoRejection = !undoStack.isEmpty
         log("棄却を取り消した: \(group.members.count)枚")
         return .done
     }
@@ -988,7 +995,7 @@ final class DuplicateScanner: ObservableObject {
     }
 
     private func forgetUndo() {
-        undoGroup = nil
+        undoStack.removeAll()
         canUndoRejection = false
     }
 
