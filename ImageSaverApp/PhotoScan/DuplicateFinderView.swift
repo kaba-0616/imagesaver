@@ -190,9 +190,15 @@ struct DuplicateFinderView: View {
         case .counting:
             counting
         case .scanning(let done, let total, let remaining):
-            scanning(done: done, total: total, remaining: remaining)
+            let fraction = total > 0 ? Double(done) / Double(total) : 0
+            combinedProgress(fraction: fraction * Self.scanningWeight,
+                              detail: "\(done) / \(total) 枚",
+                              remaining: remaining)
         case .grouping(let fraction, let remaining):
-            grouping(fraction: fraction, remaining: remaining)
+            combinedProgress(fraction: Self.scanningWeight
+                                + (1 - Self.scanningWeight) * min(max(fraction, 0), 1),
+                              detail: "同じ写真どうしを照合しています…",
+                              remaining: remaining)
         case .ready:
             results
         }
@@ -252,25 +258,22 @@ struct DuplicateFinderView: View {
         .padding(32)
     }
 
-    private func scanning(done: Int, total: Int, remaining: TimeInterval?) -> some View {
-        VStack(spacing: 12) {
-            ProgressView(value: total > 0 ? min(Double(done) / Double(total), 1) : 0)
-                .padding(.horizontal, 48)
-            Text("\(done) / \(total) 枚")
-                .font(.footnote)
-            Text(remainingText(remaining))
-                .font(.caption)
-                .foregroundColor(.secondary)
-            stayForegroundNotice
-        }
-        .padding(32)
-    }
+    /// How much of the combined bar the fingerprinting pass (`.scanning`)
+    /// gets, with the matching pass (`.grouping`) taking the rest. There is
+    /// no way to know the true split in advance -- the two passes' relative
+    /// cost depends on how much of the cache survived and how large the
+    /// library is -- so this is a fixed estimate rather than a measurement.
+    /// What it buys either way: one bar that only ever moves forward across
+    /// both passes, instead of two bars that each restart at zero and read,
+    /// at a glance, as the process having gone backward.
+    private static let scanningWeight = 0.6
 
-    private func grouping(fraction: Double, remaining: TimeInterval?) -> some View {
+    private func combinedProgress(fraction: Double, detail: String,
+                                   remaining: TimeInterval?) -> some View {
         VStack(spacing: 12) {
             ProgressView(value: min(max(fraction, 0), 1))
                 .padding(.horizontal, 48)
-            Text("同じ写真どうしを照合しています…")
+            Text(detail)
                 .font(.footnote)
             Text(remainingText(remaining))
                 .font(.caption)
@@ -555,7 +558,8 @@ struct DuplicateFinderView: View {
             }
             .font(.caption)
             .foregroundColor(.secondary)
-            .padding(.top, 24)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 40)
             .disabled(scanner.phase != .ready || scanner.isSweepRunning)
             #endif
         }
