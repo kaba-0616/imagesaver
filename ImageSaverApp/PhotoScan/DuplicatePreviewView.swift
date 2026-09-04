@@ -74,6 +74,12 @@ struct DuplicatePreviewView: View {
     /// be swiped back past again on every single rejection.
     @State private var browseDirection = 1
     @State private var lastKnownIndex: Int
+    /// Last-reported frame of every currently-realized photo tile, in the
+    /// filmstrip's own "filmstrip" coordinate space -- see
+    /// `TileFramePreferenceKey`. A tile `LazyHStack` has not realized yet
+    /// (out of the visible/buffered range) simply has no entry, which reads
+    /// the same as "not visible" below and correctly still triggers a scroll.
+    @State private var filmstripTileFrames: [String: CGRect] = [:]
 
     /// Flattened once and cached rather than recomputed on every body
     /// evaluation. This used to be a computed property re-running
@@ -316,6 +322,18 @@ struct DuplicatePreviewView: View {
 
     // MARK: - Filmstrip
 
+    /// Each photo tile's frame within the strip's own scrolled coordinate
+    /// space, reported so `onChange(of: index)` can tell whether the tile a
+    /// swipe just landed on is already on screen -- recentering the strip
+    /// every single swipe, even when the target was already fully visible,
+    /// read as unwanted motion the list didn't need to make.
+    private struct TileFramePreferenceKey: PreferenceKey {
+        static var defaultValue: [String: CGRect] = [:]
+        static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+            value.merge(nextValue()) { _, new in new }
+        }
+    }
+
     /// One tile of the strip below: a page to jump to, the "≠" that rejects
     /// the group it trails, or the thin bar marking where one group's run of
     /// pages ends and the next begins.
@@ -423,9 +441,19 @@ struct DuplicatePreviewView: View {
                         // instead of the middle a longer row would fill.
                         .frame(minWidth: geometry.size.width, alignment: .center)
                     }
+                    .coordinateSpace(name: "filmstrip")
+                    .onPreferenceChange(TileFramePreferenceKey.self) { filmstripTileFrames = $0 }
                     .onChange(of: index) { moved in
                         guard pages.indices.contains(moved) else { return }
                         let target = FilmstripItem.photoID(pages[moved].member.localIdentifier)
+                        // Already fully on screen: leave the scroll position
+                        // alone. Anything else -- off to one side, or a tile
+                        // `LazyHStack` has not even realized yet -- still gets
+                        // the recentering scroll as before.
+                        if let frame = filmstripTileFrames[target],
+                           frame.minX >= 0, frame.maxX <= geometry.size.width {
+                            return
+                        }
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo(target, anchor: .center)
                         }
@@ -488,6 +516,14 @@ struct DuplicatePreviewView: View {
                 // shows rather than by a page number that shifts under a
                 // rejection.
                 .id(item.id)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: TileFramePreferenceKey.self,
+                            value: [item.id: proxy.frame(in: .named("filmstrip"))]
+                        )
+                    }
+                )
         case .reject(let groupID):
             Button {
                 rejectAndAdvance(groupID)
