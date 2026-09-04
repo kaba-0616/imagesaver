@@ -1,4 +1,5 @@
 import UIKit
+import Vision
 
 /// Pixel margins detected on one photo's four edges, in the original asset's
 /// own pixel coordinates (`realWidth`/`realHeight` passed to `detect`).
@@ -37,11 +38,17 @@ enum MarginDetector {
 
     /// `image` should already be a modest downsample (the caller decides the
     /// fetch size) -- this reads it at whatever resolution it is given.
-    static func detect(in image: CGImage, realWidth: Int, realHeight: Int, level: Int) -> MarginResult? {
+    ///
+    /// The second element is a short diagnostic note, non-nil only when
+    /// Vision's rectangle detector actually changed the outcome (confirmed,
+    /// narrowed, or dropped an edge the color pass alone found) -- meant to
+    /// be logged so a real-device run shows which cases Vision affected,
+    /// without a line for every ordinary confirmation.
+    static func detect(in image: CGImage, realWidth: Int, realHeight: Int, level: Int) -> (MarginResult?, String?) {
         let sampleWidth = image.width
         let sampleHeight = image.height
-        guard sampleWidth > 8, sampleHeight > 8, realWidth > 0, realHeight > 0 else { return nil }
-        guard let rows = pixelRows(of: image, width: sampleWidth, height: sampleHeight) else { return nil }
+        guard sampleWidth > 8, sampleHeight > 8, realWidth > 0, realHeight > 0 else { return (nil, nil) }
+        guard let rows = pixelRows(of: image, width: sampleWidth, height: sampleHeight) else { return (nil, nil) }
 
         let tolerance = MarginLevel.colorTolerance(for: level)
         let varianceLimit = MarginLevel.varianceLimit(for: level)
@@ -75,14 +82,58 @@ enum MarginDetector {
         let bottom = bottomDepth >= minRows ? min(bottomDepth, capRows) : 0
         let left = leftDepth >= minCols ? min(leftDepth, capCols) : 0
         let right = rightDepth >= minCols ? min(rightDepth, capCols) : 0
-        guard top > 0 || bottom > 0 || left > 0 || right > 0 else { return nil }
+        guard top > 0 || bottom > 0 || left > 0 || right > 0 else { return (nil, nil) }
+
+        let pixelResult = (top: top, bottom: bottom, left: left, right: right)
+
+        // Vision is only ever asked to confirm or narrow a candidate the
+        // color pass already found -- see `reconcile` -- so it costs nothing
+        // on the large majority of ordinary, margin-free photos that never
+        // reach this point.
+        let vision = detectRectangle(in: image, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
+        let (final, note) = reconcile(pixel: pixelResult, vision: vision,
+                                       minRows: minRows, minCols: minCols)
+        guard final.top > 0 || final.bottom > 0 || final.left > 0 || final.right > 0 else { return (nil, note) }
 
         let scaleX = Double(realWidth) / Double(sampleWidth)
         let scaleY = Double(realHeight) / Double(sampleHeight)
-        return MarginResult(top: Int((Double(top) * scaleY).rounded()),
-                             bottom: Int((Double(bottom) * scaleY).rounded()),
-                             left: Int((Double(left) * scaleX).rounded()),
-                             right: Int((Double(right) * scaleX).rounded()))
+        let result = MarginResult(top: Int((Double(final.top) * scaleY).rounded()),
+                                   bottom: Int((Double(final.bottom) * scaleY).rounded()),
+                                   left: Int((Double(final.left) * scaleX).rounded()),
+                                   right: Int((Double(final.right) * scaleX).rounded()))
+        return (result, note)
+    }
+
+    private typealias EdgeDepths = (top: Int, bottom: Int, left: Int, right: Int)
+
+    /// Combines the color-based candidate with Vision's rectangle, when it
+    /// found one. Vision is a confirming signal, never an additional gate on
+    /// its own: when it fails to find a usable axis-aligned rectangle at all
+    /// (low confidence, tilted, or nothing rectangular there), the color
+    /// result passes through unchanged, since a low-saturation but genuine
+    /// border does not need Vision's help to be trusted. When Vision *does*
+    /// find one, each edge is only kept where both agree there is a margin
+    /// (the smaller, more conservative depth wins); an edge where Vision
+    /// disagrees is dropped rather than trusted from the color pass alone.
+    private static func reconcile(pixel: EdgeDepths, vision: EdgeDepths?,
+                                   minRows: Int, minCols: Int) -> (EdgeDepths, String?) {
+        guard let vision else { return (pixel, nil) }
+
+        func agreed(_ pixelDepth: Int, _ visionDepth: Int, floor: Int) -> Int {
+            guard pixelDepth > 0, visionDepth >= floor else { return 0 }
+            return min(pixelDepth, visionDepth)
+        }
+
+        let final: EdgeDepths = (
+            top: agreed(pixel.top, vision.top, floor: minRows),
+            bottom: agreed(pixel.bottom, vision.bottom, floor: minRows),
+            left: agreed(pixel.left, vision.left, floor: minCols),
+            right: agreed(pixel.right, vision.right, floor: minCols)
+        )
+        guard final != pixel else {
+            return (final, "Visionが一致を確認")
+        }
+        return (final, "Visionと不一致のため調整: 色\(pixel) → 採用\(final)")
     }
 
     private enum Edge { case top, bottom, left, right }
@@ -191,6 +242,59 @@ enum MarginDetector {
         // average instead could still shave into the one column where the
         // subject actually starts earliest.
         return shallowest
+    }
+
+    /// Runs `VNDetectRectanglesRequest` on the same downsample the color
+    /// pass already read, and turns the strongest rectangle it finds into
+    /// edge depths -- or `nil` if it found nothing usable. Only ever called
+    /// after the color pass already has a candidate (see `detect`), so this
+    /// cost never touches the majority of a library that has no margin at
+    /// all.
+    ///
+    /// Rejects anything not aligned to the image's own axes: Vision is a
+    /// general "find a quadrilateral" detector (a sign, a window, a phone
+    /// screen in the shot all qualify), not specifically "find the border
+    /// around this canvas" -- what actually narrows it down to that job here
+    /// is requiring the result to be a plain, unrotated rectangle, which is
+    /// the only shape a synthetic margin can ever produce.
+    private static func detectRectangle(in image: CGImage, sampleWidth: Int, sampleHeight: Int) -> EdgeDepths? {
+        let request = VNDetectRectanglesRequest()
+        request.minimumConfidence = 0.8
+        request.minimumAspectRatio = 0.2
+        request.maximumAspectRatio = 1.0
+        request.quadratureTolerance = 8
+        request.minimumSize = 0.3
+        request.maximumObservations = 1
+
+        let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+        guard let observation = request.results?.first as? VNRectangleObservation else { return nil }
+        return axisAlignedMargin(from: observation, width: sampleWidth, height: sampleHeight)
+    }
+
+    /// `VNRectangleObservation`'s four corners are normalized (0...1, origin
+    /// bottom-left). This only accepts a corner set that is (within a small
+    /// tolerance) an axis-aligned rectangle -- a tilted or trapezoidal quad
+    /// is not something a plain crop can express, and is almost certainly
+    /// Vision finding some unrelated rectangular object in the shot rather
+    /// than a straight synthetic border.
+    private static func axisAlignedMargin(from observation: VNRectangleObservation,
+                                           width: Int, height: Int) -> EdgeDepths? {
+        let tl = observation.topLeft, tr = observation.topRight
+        let bl = observation.bottomLeft, br = observation.bottomRight
+        let tolerance: CGFloat = 0.02
+        guard abs(tl.y - tr.y) <= tolerance, abs(bl.y - br.y) <= tolerance,
+              abs(tl.x - bl.x) <= tolerance, abs(tr.x - br.x) <= tolerance else { return nil }
+
+        let left = Int((min(tl.x, bl.x) * CGFloat(width)).rounded())
+        let right = Int(((1 - max(tr.x, br.x)) * CGFloat(width)).rounded())
+        let top = Int(((1 - max(tl.y, tr.y)) * CGFloat(height)).rounded())
+        let bottom = Int((min(bl.y, br.y) * CGFloat(height)).rounded())
+        return (top: max(0, top), bottom: max(0, bottom), left: max(0, left), right: max(0, right))
     }
 
     /// `rows[y]` is one scanline of `width*4` bytes (RGB + one padding byte

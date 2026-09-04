@@ -314,10 +314,10 @@ final class MarginCropScanner: ObservableObject {
             // a late callback's write off a captured local var.
             _ = waiter.wait(timeout: .now() + 5)
 
-            let margin = box.take().flatMap {
+            let (margin, note) = box.take().map {
                 MarginDetector.detect(in: $0, realWidth: asset.pixelWidth,
                                        realHeight: asset.pixelHeight, level: level)
-            }
+            } ?? (nil, nil)
             cache[asset.localIdentifier] = MarginCropCacheEntry(modificationDate: asset.modificationDate,
                                                                  width: asset.pixelWidth,
                                                                  height: asset.pixelHeight,
@@ -333,9 +333,16 @@ final class MarginCropScanner: ObservableObject {
                 // the same line every run would just bury the new ones.
                 let shortID = String(asset.localIdentifier.prefix(8))
                 Task { @MainActor in
-                    PhotoScanLog.shared.note(
-                        "余白検出: \(shortID) \(asset.pixelWidth)x\(asset.pixelHeight) "
-                        + "上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)")
+                    var line = "余白検出: \(shortID) \(asset.pixelWidth)x\(asset.pixelHeight) "
+                        + "上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)"
+                    // Only Vision actually narrowing/dropping an edge is
+                    // worth a line of its own; a plain confirmation or a
+                    // photo Vision had nothing to say about would just
+                    // repeat the same information for every candidate.
+                    if let note, note != "Visionが一致を確認" {
+                        line += " (\(note))"
+                    }
+                    PhotoScanLog.shared.note(line)
                 }
             }
         }
