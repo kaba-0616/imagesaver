@@ -375,7 +375,14 @@ struct DuplicatePreviewView: View {
                 items.append(.photo(pageIndex: pageIndex + memberOffset, member: member))
             }
             items.append(.reject(groupID: group.id))
-            if offset < groups.count - 1 { items.append(.divider(afterGroupID: group.id)) }
+            // `offset < groups.count - 1` alone only asks "is another group's
+            // slot left in the array" -- if every one of those remaining
+            // slots is a rejected-but-not-yet-removed group in
+            // `hiddenGroupIDs`, none of them will ever contribute a tile, so
+            // this divider would trail the visible strip with nothing after
+            // it. Only draw it when a genuinely visible group follows.
+            let hasVisibleGroupAfter = groups[(offset + 1)...].contains { !hiddenGroupIDs.contains($0.id) }
+            if hasVisibleGroupAfter { items.append(.divider(afterGroupID: group.id)) }
         }
         return items
     }

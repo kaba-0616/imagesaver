@@ -20,6 +20,9 @@ struct DuplicateFinderView: View {
     /// once it is let go. Re-grouping a whole library on every step would make
     /// the control unusable.
     @State private var levelDisplay = Double(DuplicateLevel.standard)
+    /// Whether the level slider's popover is up. It lives behind the reload
+    /// button now rather than pinned under the tab bar -- see `levelPicker`.
+    @State private var showingLevelPicker = false
     @State private var confirmingDelete = false
     /// Which tab's exclusions the confirmation alert is about, presented from
     /// inside the settings sheet. The two tabs clear independently now, so
@@ -67,8 +70,17 @@ struct DuplicateFinderView: View {
                     // Deletion no longer re-groups on its own, so this is the
                     // one way back to a fresh pass once the user is ready for
                     // one -- on their schedule, not after every single delete.
+                    //
+                    // The similar tab's level slider used to sit permanently
+                    // under the tab bar; it now only appears here, in a
+                    // popover, so the list stays uncluttered until someone
+                    // actually wants to change or confirm the level.
                     Button {
-                        scanner.regroup(note: "手動再照合", kind: tab)
+                        if tab == .similar {
+                            showingLevelPicker = true
+                        } else {
+                            scanner.regroup(note: "手動再照合", kind: tab)
+                        }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -78,6 +90,9 @@ struct DuplicateFinderView: View {
                     // queue a second full grouping behind the first on the
                     // same serial queue.
                     .disabled(scanner.phase != .ready || scanner.regrouping != nil)
+                    .popover(isPresented: $showingLevelPicker) {
+                        levelPicker
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showsCheckboxes.toggle() } label: {
@@ -280,14 +295,24 @@ struct DuplicateFinderView: View {
     // MARK: - Results
 
     private var results: some View {
-        VStack(spacing: 0) {
-            tabPicker
-            regroupBar
-            if scanner.access == .limited {
-                limitedNotice.padding(.horizontal, 16).padding(.bottom, 4)
+        ZStack {
+            VStack(spacing: 0) {
+                tabPicker
+                if scanner.access == .limited {
+                    limitedNotice.padding(.horizontal, 16).padding(.bottom, 4)
+                }
+                list
+                bottomBar
             }
-            list
-            bottomBar
+            // A regroup started from the results screen used to run behind a
+            // thin bar over the list, leaving "≠" and every other control
+            // live underneath it -- pressing one mid-regroup could act on a
+            // group the new grouping was about to reshuffle out from under
+            // it. A full scrim blocks input the same way the initial
+            // scan/count/group phases already do.
+            if let state = scanner.regrouping {
+                regroupOverlay(state)
+            }
         }
         .confirmationDialog("「\(tab.tabLabel)」で選んだ\(chosenCount)枚を削除しますか？",
                             isPresented: $confirmingDelete,
@@ -301,6 +326,29 @@ struct DuplicateFinderView: View {
         }
     }
 
+    @ViewBuilder
+    private func regroupOverlay(_ state: DuplicateScanner.Regrouping) -> some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView(value: min(max(state.fraction, 0), 1))
+                    .frame(width: 200)
+                Text("照合し直しています…")
+                    .font(.subheadline.weight(.semibold))
+                Text(remainingText(state.remaining))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(24)
+            .background(.regularMaterial)
+            .cornerRadius(16)
+        }
+        // Swallows every tap that would otherwise reach the list/bottom bar
+        // behind it -- the point of this overlay.
+        .contentShape(Rectangle())
+    }
+
     private var tabPicker: some View {
         Picker("表示", selection: $tab) {
             ForEach(DuplicateGroup.Kind.allCases, id: \.self) { kind in
@@ -310,25 +358,6 @@ struct DuplicateFinderView: View {
         .pickerStyle(.segmented)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-    }
-
-    /// A re-group started from the results keeps the results. The slider that
-    /// starts it lives in the list, and replacing the list with a spinner
-    /// takes the control away from under the user's finger halfway through an
-    /// adjustment -- so the progress and the estimate come as a thin bar over
-    /// the top of everything instead.
-    @ViewBuilder
-    private var regroupBar: some View {
-        if let state = scanner.regrouping {
-            VStack(spacing: 2) {
-                ProgressView(value: min(max(state.fraction, 0), 1))
-                Text("照合し直しています… " + remainingText(state.remaining))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 6)
-        }
     }
 
     private func tabLabel(_ kind: DuplicateGroup.Kind) -> String {
@@ -342,19 +371,6 @@ struct DuplicateFinderView: View {
 
     private var list: some View {
         VStack(spacing: 0) {
-            // Only on the similar tab. An exact copy and a burst are found
-            // without the threshold taking any part in it, so offering the
-            // slider next to them would claim an effect it does not have.
-            //
-            // Kept outside the GeometryReader below on purpose: it used to
-            // live inside the centered stack, and got pulled down along with
-            // it whenever the empty state centered itself -- the slider
-            // belongs pinned under the tab bar regardless of what the list
-            // below it is doing.
-            if tab == .similar {
-                levelControl
-                    .padding(16)
-            }
             GeometryReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 16) {
@@ -465,7 +481,10 @@ struct DuplicateFinderView: View {
         DuplicateLevel.clamp(Int(levelDisplay.rounded()))
     }
 
-    private var levelControl: some View {
+    /// Reached from the reload button now instead of sitting permanently
+    /// under the tab bar -- the slider only needs to be on screen while
+    /// someone is actually choosing a level.
+    private var levelPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("判定のレベル")
@@ -500,17 +519,20 @@ struct DuplicateFinderView: View {
             Text("判定のレベルを変えると、一度「違う」とした組が再び出ることがあります。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
-            if levelValue != scanner.level {
-                HStack {
-                    Text("表示中の結果はレベル\(scanner.level)のものです")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
-                    Spacer()
-                    Button("照合") { scanner.commitLevel(levelValue) }
-                        .font(.caption.weight(.semibold))
-                        .disabled(scanner.regrouping != nil)
+            Button("この設定で照合") {
+                // Only actually recomputes when the level changed; unchanged,
+                // it still serves as a plain manual re-match (same as the
+                // reload button's own behavior on the identical tab).
+                if levelValue != scanner.level {
+                    scanner.commitLevel(levelValue)
+                } else {
+                    scanner.regroup(note: "手動再照合", kind: .similar)
                 }
+                showingLevelPicker = false
             }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .disabled(scanner.regrouping != nil)
             #if IMAGESAVER_DEV_TOOLS
             Button {
                 scanner.runFullLevelSweep()
@@ -525,9 +547,8 @@ struct DuplicateFinderView: View {
             .disabled(scanner.phase != .ready || scanner.isSweepRunning)
             #endif
         }
-        .padding(12)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
+        .padding(16)
+        .frame(width: 280)
     }
 
     // MARK: - Empty
