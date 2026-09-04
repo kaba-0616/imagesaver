@@ -106,6 +106,22 @@ Action.prototype = {
             return pageKey(target.pathname) !== thisPageKey;
         }
 
+        // The "メンバー別ブログ" roster at the foot of every diary page links
+        // through client-side routing (an `href` that does not actually name
+        // the destination page), so linksElsewhere's path comparison cannot
+        // tell these avatars apart from the post's own photos by link target.
+        // Their box size can, though: the roster is always laid out as a grid
+        // of small round avatars, while an actual diary photo is shown large.
+        var MEMBER_AVATAR_MAX_BOX = 220;
+
+        function isMemberAvatar(el) {
+            if (!hostHasMemberWidget()) { return false; }
+            var rect;
+            try { rect = el.getBoundingClientRect(); } catch (e) { return false; }
+            return rect.width > 0 && rect.width <= MEMBER_AVATAR_MAX_BOX
+                && rect.height > 0 && rect.height <= MEMBER_AVATAR_MAX_BOX;
+        }
+
         // Some CMSs serve every picture through a resize endpoint with the
         // wanted box written into the path: .../<hash>/1200_1200_102400.jpg.
         // The third number is a byte budget, so even asking at the original's
@@ -286,7 +302,7 @@ Action.prototype = {
                     || bestFromSrcset(img.getAttribute("srcset"))
                     || bestFromSrcset(img.getAttribute("data-srcset"))
                     || fromLazyAttrs(img);
-                var imgOrigin = linksElsewhere(img) ? "other" : "dom";
+                var imgOrigin = (linksElsewhere(img) || isMemberAvatar(img)) ? "other" : "dom";
                 addURL(url, img.naturalWidth, img.naturalHeight, imgOrigin);
                 // The srcset may name a larger file than the one Safari picked
                 // for this viewport; offer that too.

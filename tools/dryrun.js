@@ -153,7 +153,12 @@ function checkPlistSafe(payload) {
         // entry's own detail page.
         El("img", { src: `${H}/ccf/7167e7a550f4f7abd2f5329fe94d2/60_60_102400.jpg` },
            { rect: { width: 60, height: 60 },
-             link: "https://sakurazaka46.com/s/s46/diary/detail/70664" })
+             link: "https://sakurazaka46.com/s/s46/diary/detail/70664" }),
+        // The "メンバー別ブログ" roster footer: client-side routed, so its
+        // `href` does not name a different page -- only the small avatar box
+        // size distinguishes it from the post's own (much larger) photos.
+        El("img", { src: `${H}/9ad/b1c4b9f5e6a7c8d9e0f1a2b3c4d5e6/300_300_102400.jpg` },
+           { rect: { width: 110, height: 110 }, link: "#" })
     ];
     const p = run("https://sakurazaka46.com/s/s46/diary/detail/70663?ima=0000", els);
     console.log("\n日記詳細ページ(他メンバーの日記ウィジェットあり):");
@@ -163,9 +168,12 @@ function checkPlistSafe(payload) {
     const byURL = Object.fromEntries(p.images.map(i => [i.url, i]));
     const own = byURL[`${H}/f0c/2640108dd382a555036b1443cfdde.jpg`];
     const widget = byURL[`${H}/ccf/7167e7a550f4f7abd2f5329fe94d2.jpg`];
+    const roster = byURL[`${H}/9ad/b1c4b9f5e6a7c8d9e0f1a2b3c4d5e6.jpg`];
     check("自分の投稿の写真はdom扱いのまま", !!own && own.origin !== "other", own && own.origin);
     check("他メンバーの日記へのリンク内の写真はother扱いになる",
           !!widget && widget.origin === "other", widget && widget.origin);
+    check("メンバー別ブログのアバターはother扱いになる(サイズ判定)",
+          !!roster && roster.origin === "other", roster && roster.origin);
 }
 
 // ---------------------------------------------------------------------------
