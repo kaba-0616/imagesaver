@@ -1,7 +1,6 @@
 import CoreImage
 import Photos
 import UIKit
-import UniformTypeIdentifiers
 
 /// Orchestrates the margin-trim feature: scan the whole library for photos
 /// with a detectable uniform-color margin, then apply or skip each one the
@@ -115,7 +114,7 @@ final class MarginCropScanner: ObservableObject {
     func apply(_ candidate: MarginCropCandidate) async -> ApplyOutcome {
         let found = PHAsset.fetchAssets(withLocalIdentifiers: [candidate.localIdentifier], options: nil)
         guard let asset = found.firstObject else { return .failed("写真が見つかりませんでした") }
-        guard asset.canPerformEditOperation(.content) else {
+        guard asset.canPerform(.content) else {
             return .failed("この写真は編集できません")
         }
 
@@ -150,13 +149,11 @@ final class MarginCropScanner: ObservableObject {
             return .failed("画像の書き出しに失敗しました")
         }
 
+        // `PHContentEditingOutput` has no format property to set -- Photos
+        // determines the rendered content's format by reading the file
+        // itself, so writing valid JPEG bytes to `renderedContentURL` is
+        // sufficient regardless of whether the original was JPEG or HEIC.
         let output = PHContentEditingOutput(contentEditingInput: input)
-        // The original may well be HEIC; writing plain JPEG bytes to
-        // `renderedContentURL` without saying so risks Photos reading the
-        // file as whatever format it assumed instead of what is actually
-        // there. Declaring the type explicitly is what keeps this correct
-        // regardless of the original's own format.
-        output.uniformTypeIdentifier = UTType.jpeg.identifier
         do {
             try data.write(to: output.renderedContentURL, options: .atomic)
         } catch {
