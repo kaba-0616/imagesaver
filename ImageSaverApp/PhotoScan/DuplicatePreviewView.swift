@@ -704,14 +704,17 @@ struct DuplicatePreviewView: View {
             }
         }
 
-        // The immediate neighbor only (±1, matching how much room the LRU
-        // cache below actually has beyond the current page) also gets
-        // warmed directly into `loader`'s own cache, at the same target size
-        // `currentPhoto` displays at -- not the smaller one above -- so the
-        // interactive drag has an actual bitmap to composite instead of
-        // black the moment the user's finger starts moving, rather than
-        // waiting for the swipe to settle and `loadCurrent` to catch up.
-        for adjacent in [index - 1, index + 1] where pages.indices.contains(adjacent) {
+        // ±2, matching how much room the LRU cache below actually has beyond
+        // the current page, also gets warmed directly into `loader`'s own
+        // cache, at the same target size `currentPhoto` displays at -- not
+        // the smaller one above -- so the interactive drag has an actual
+        // bitmap to composite instead of black the moment the user's finger
+        // starts moving, rather than waiting for the swipe to settle and
+        // `loadCurrent` to catch up. ±2 rather than ±1: rejecting a group
+        // jumps straight to the next *group*, which can land two or more
+        // pages away, and rejecting twice in a row jumps again before the
+        // first jump's neighbor has necessarily finished loading.
+        for adjacent in [index - 2, index - 1, index + 1, index + 2] where pages.indices.contains(adjacent) {
             loader.warm(pages[adjacent].member.localIdentifier, target: targetSize)
         }
     }
@@ -772,12 +775,16 @@ final class PreviewImageLoader: ObservableObject {
     /// away and re-fetch it from scratch every time -- a black flash on
     /// every return trip even between only two photos -- since `load`
     /// unconditionally discarded whatever it held whenever the identifier
-    /// changed. Capped at 3 (the current page plus one either side, matching
-    /// how many pages the fullscreen viewer prefetches) so this never grows
-    /// into the "hold every image" design this app deliberately avoids.
+    /// changed. Capped at 5 (the current page plus two either side, matching
+    /// how many pages the fullscreen viewer prefetches -- raised from 3/±1
+    /// because rejecting two groups in quick succession jumps past a single
+    /// neighbor before it finishes loading) so this never grows into the
+    /// "hold every image" design this app deliberately avoids. This runs in
+    /// the container app, not the extension, so the tighter memory ceiling
+    /// documented for the share-sheet process does not apply here.
     private var cache: [String: UIImage] = [:]
     private var cacheOrder: [String] = []
-    private let cacheLimit = 3
+    private let cacheLimit = 5
 
     /// A read-only peek at the cache -- never triggers a fetch. Lets the
     /// pager paint a neighboring page's actual photo (when it happens to
