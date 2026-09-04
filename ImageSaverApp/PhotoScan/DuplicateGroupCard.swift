@@ -243,6 +243,10 @@ struct DuplicateGroupCard: View {
     private func caption(_ member: PhotoFingerprint) -> some View {
         let isKeep = member.localIdentifier == group.suggestedKeep.localIdentifier
         return VStack(spacing: 0) {
+            Text(PhotoScanFormat.pixels(width: member.width, height: member.height))
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
             Text(sizeText(member))
                 .font(.system(size: 9))
                 .foregroundColor(.secondary)
@@ -254,13 +258,11 @@ struct DuplicateGroupCard: View {
         }
     }
 
-    /// The size when it is known, the pixel count when it is not. Never a
-    /// zero: a size that could not be read is not a small file.
+    /// The byte size when it is known. Never a zero: a size that could not be
+    /// read is not a small file, and the pixel dimensions above already cover
+    /// the case where nothing else is available.
     private func sizeText(_ member: PhotoFingerprint) -> String {
-        if let size = PhotoScanFormat.size(member.byteCount ?? details[member.localIdentifier]?.byteCount) {
-            return size
-        }
-        return PhotoScanFormat.pixels(width: member.width, height: member.height)
+        PhotoScanFormat.size(member.byteCount ?? details[member.localIdentifier]?.byteCount) ?? "サイズ不明"
     }
 
     /// Favourites are left out, because the button never picks them: judged
