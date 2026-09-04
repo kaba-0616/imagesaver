@@ -55,11 +55,11 @@ enum MarginDetector {
         let rightDepth = marginDepth(rows: rows, width: sampleWidth, height: sampleHeight,
                                       from: .right, tolerance: tolerance, varianceLimit: varianceLimit)
 
-        // Never eat more than 40% out of one side -- a genuinely dark or
+        // Never eat more than ~45% out of one side -- a genuinely dark or
         // plain photo (a night sky, a studio backdrop) should not be able to
         // vanish entirely just because it is uniform edge to edge.
-        let capRows = sampleHeight * 2 / 5
-        let capCols = sampleWidth * 2 / 5
+        let capRows = sampleHeight * 9 / 20
+        let capCols = sampleWidth * 9 / 20
         // A margin has to be at least ~1.5% of that edge's own dimension to
         // count -- a few pixels of compression fringe is not a bar.
         let minRows = max(2, sampleHeight * 3 / 200)
@@ -81,15 +81,18 @@ enum MarginDetector {
 
     private enum Edge { case top, bottom, left, right }
 
-    /// One scanline's average color and its own internal color variance
-    /// (high variance means "this line has real content in it", not a flat
-    /// margin, regardless of how close its average color is to the edge's).
-    private struct Line { let r: Double; let g: Double; let b: Double; let variance: Double }
+    /// One scanline's average color, its own internal color variance (high
+    /// variance means "this line has real content in it", not a flat margin,
+    /// regardless of how close its average color is to the edge's), and its
+    /// saturation (how far the three channels spread apart -- a colored
+    /// studio backdrop can be just as flat and uniform as a real letterbox
+    /// bar, but it is not one; only near-white/near-black/gray counts).
+    private struct Line { let r: Double; let g: Double; let b: Double; let variance: Double; let saturation: Double }
 
     private static func line(_ index: Int, rows: [[UInt8]], width: Int, height: Int, edge: Edge) -> Line {
         let isHorizontal = edge == .top || edge == .bottom
         let length = isHorizontal ? width : height
-        guard length > 0 else { return Line(r: 0, g: 0, b: 0, variance: 0) }
+        guard length > 0 else { return Line(r: 0, g: 0, b: 0, variance: 0, saturation: 0) }
 
         var sumR = 0, sumG = 0, sumB = 0
         var samples: [Double] = []
@@ -106,7 +109,8 @@ enum MarginDetector {
         let meanR = Double(sumR) / count, meanG = Double(sumG) / count, meanB = Double(sumB) / count
         let mean = (meanR + meanG + meanB) / 3
         let variance = samples.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / count
-        return Line(r: meanR, g: meanG, b: meanB, variance: variance)
+        let saturation = max(meanR, meanG, meanB) - min(meanR, meanG, meanB)
+        return Line(r: meanR, g: meanG, b: meanB, variance: variance, saturation: saturation)
     }
 
     /// Walks in from `edge`, one line at a time, stopping at the first line
@@ -117,15 +121,16 @@ enum MarginDetector {
         let lineCount = (edge == .top || edge == .bottom) ? height : width
         guard lineCount > 0 else { return 0 }
 
+        let saturationLimit = Double(MarginLevel.saturationLimit)
         let outermost = edge == .bottom || edge == .right ? lineCount - 1 : 0
         let baseline = line(outermost, rows: rows, width: width, height: height, edge: edge)
-        guard baseline.variance <= Double(varianceLimit) else { return 0 }
+        guard baseline.variance <= Double(varianceLimit), baseline.saturation <= saturationLimit else { return 0 }
 
         var depth = 0
         for step in 0..<lineCount {
             let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
             let current = line(index, rows: rows, width: width, height: height, edge: edge)
-            guard current.variance <= Double(varianceLimit) else { break }
+            guard current.variance <= Double(varianceLimit), current.saturation <= saturationLimit else { break }
             let diff = abs(current.r - baseline.r) + abs(current.g - baseline.g) + abs(current.b - baseline.b)
             guard diff <= Double(tolerance) else { break }
             depth = step + 1

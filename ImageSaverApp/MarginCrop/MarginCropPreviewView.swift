@@ -16,10 +16,14 @@ struct MarginCropPreviewView: View {
     @State private var showingAfter = false
     @State private var toast: String?
     @State private var busy = false
+    /// Which background the photo sits against. A white margin can hide
+    /// against a light backdrop and a black one against a dark backdrop --
+    /// switching this is how a check can actually see either edge clearly.
+    @State private var backgroundIsWhite = false
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            (backgroundIsWhite ? Color.white : Color.black).ignoresSafeArea()
             VStack(spacing: 0) {
                 topBar
                 Spacer(minLength: 0)
@@ -41,17 +45,25 @@ struct MarginCropPreviewView: View {
         .onAppear { load() }
     }
 
+    /// The one color everything in this overlay chrome uses -- flips with
+    /// the background so text and icons stay legible against either.
+    private var foreground: Color { backgroundIsWhite ? .black : .white }
+    private var dimBackground: Color { (backgroundIsWhite ? Color.black : Color.white).opacity(0.15) }
+
     private var topBar: some View {
         HStack {
             Button("閉じる") { onClose() }
-                .foregroundColor(.white)
+                .foregroundColor(foreground)
             Spacer()
-            Picker("", selection: $showingAfter) {
-                Text("トリミング前").tag(false)
-                Text("トリミング後").tag(true)
+            modeToggle
+            Spacer()
+            Button {
+                backgroundIsWhite.toggle()
+            } label: {
+                Image(systemName: backgroundIsWhite ? "circle.righthalf.filled" : "circle.lefthalf.filled")
+                    .font(.title3)
+                    .foregroundColor(foreground)
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 220)
         }
         .padding(16)
     }
@@ -67,7 +79,7 @@ struct MarginCropPreviewView: View {
                         .padding()
                 } else {
                     Text("プレビューを作成できませんでした")
-                        .foregroundColor(.white)
+                        .foregroundColor(foreground)
                 }
             } else {
                 GeometryReader { geometry in
@@ -83,8 +95,36 @@ struct MarginCropPreviewView: View {
                 .padding()
             }
         } else {
-            ProgressView().tint(.white)
+            ProgressView().tint(foreground)
         }
+    }
+
+    /// A plain `Picker(.segmented)` on a black backdrop is what prompted
+    /// this: the system control paints its unselected label in the system's
+    /// own label color, which on a dark background renders as barely-visible
+    /// dark-on-dark. This draws both states explicitly instead, so switching
+    /// `backgroundIsWhite` keeps both labels readable rather than just one.
+    private var modeToggle: some View {
+        HStack(spacing: 2) {
+            modeButton(title: "トリミング前", isOn: !showingAfter) { showingAfter = false }
+            modeButton(title: "トリミング後", isOn: showingAfter) { showingAfter = true }
+        }
+        .padding(2)
+        .background(dimBackground)
+        .cornerRadius(8)
+    }
+
+    private func modeButton(title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundColor(isOn ? (backgroundIsWhite ? .white : .black) : foreground)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(isOn ? foreground : Color.clear)
+                .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
     }
 
     private func fitSize(for imageSize: CGSize, in bounds: CGSize) -> CGSize {
@@ -141,7 +181,7 @@ struct MarginCropPreviewView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .tint(.white)
+            .tint(foreground)
 
             Button {
                 Task { await runApply() }

@@ -16,6 +16,7 @@ struct MarginCropFinderView: View {
     @State private var levelDisplay = Double(MarginLevel.stored())
     @State private var message: String?
     @State private var preview: MarginCropCandidate?
+    @State private var showingSettings = false
 
     var body: some View {
         content
@@ -36,12 +37,49 @@ struct MarginCropFinderView: View {
                     .disabled(scanner.phase != .ready)
                     .popover(isPresented: $showingLevelPicker) { levelPicker }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showingSettings = true } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
             }
             .fullScreenCover(item: $preview) { candidate in
                 MarginCropPreviewView(scanner: scanner, candidate: candidate) {
                     preview = nil
                 }
             }
+            .sheet(isPresented: $showingSettings) {
+                settingsSheet
+            }
+    }
+
+    private var settingsSheet: some View {
+        NavigationView {
+            List {
+                Section {
+                    HStack {
+                        Text("「トリミングしない」として除外中")
+                        Spacer()
+                        Text("\(scanner.skippedCount)枚")
+                            .foregroundColor(.secondary)
+                    }
+                    Button("除外をすべて解除") {
+                        Task {
+                            let outcome = await scanner.clearSkipped()
+                            if outcome == .done { scanner.scan() }
+                        }
+                    }
+                    .disabled(scanner.skippedCount == 0)
+                }
+            }
+            .navigationTitle("設定")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("閉じる") { showingSettings = false }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -91,17 +129,25 @@ struct MarginCropFinderView: View {
                     .foregroundColor(.secondary)
             }
             .padding(32)
-        case .scanning(let done, let total):
+        case .scanning(let done, let total, let remaining):
             VStack(spacing: 12) {
                 ProgressView(value: total > 0 ? Double(done) / Double(total) : 0)
                     .padding(.horizontal, 48)
                 Text("\(done) / \(total) 枚")
                     .font(.footnote)
+                Text(remainingText(remaining))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             .padding(32)
         case .ready:
             results
         }
+    }
+
+    private func remainingText(_ remaining: TimeInterval?) -> String {
+        guard let remaining else { return "残り時間を見積もっています…" }
+        return PhotoScanFormat.remaining(remaining)
     }
 
     private var results: some View {
@@ -129,16 +175,16 @@ struct MarginCropFinderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
+    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
 
     private var grid: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 24) {
                 ForEach(scanner.candidates) { candidate in
                     card(candidate)
                 }
             }
-            .padding(12)
+            .padding(16)
         }
     }
 
@@ -158,24 +204,23 @@ struct MarginCropFinderView: View {
                             .background(Circle().fill(Color.black.opacity(0.35)))
                     }
                     Spacer()
-                    Text(candidate.badgeLabel)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.6))
-                        .foregroundColor(.white)
-                        .cornerRadius(6)
+                    // "しない" used to be a second text button under the
+                    // thumbnail, easy to misread next to "トリミング" -- an
+                    // ✕ in the corner (the same idea as a dismissible card)
+                    // reads as "not this one" without needing a label at all.
+                    Button { Task { await skip(candidate) } } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .background(Circle().fill(Color.black.opacity(0.35)))
+                    }
                 }
                 .padding(6)
             }
-            HStack(spacing: 8) {
-                Button("トリミング") { Task { await apply(candidate) } }
-                    .font(.caption.weight(.semibold))
-                Button("しない") { Task { await skip(candidate) } }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
             .disabled(isBusy)
+            Button("トリミング") { Task { await apply(candidate) } }
+                .font(.caption.weight(.semibold))
+                .disabled(isBusy)
         }
     }
 
@@ -195,14 +240,25 @@ struct MarginCropFinderView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
-            Button {
-                Task { await applySelected() }
-            } label: {
-                Text("選択した\(selected.count)枚をまとめてトリミング")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 12) {
+                Button {
+                    Task { await skipSelected() }
+                } label: {
+                    Text("選択した\(selected.count)枚をトリミングしない")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(selected.isEmpty)
+
+                Button {
+                    Task { await applySelected() }
+                } label: {
+                    Text("トリミング")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selected.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(selected.isEmpty)
         }
         .padding(12)
         .background(.bar)
@@ -231,6 +287,16 @@ struct MarginCropFinderView: View {
         }
         selected.removeAll()
         message = "\(succeeded) / \(targets.count)枚をトリミングしました"
+    }
+
+    private func skipSelected() async {
+        let targets = scanner.candidates.filter { selected.contains($0.id) }
+        var succeeded = 0
+        for candidate in targets {
+            if await scanner.skip(candidate) == .done { succeeded += 1 }
+        }
+        selected.removeAll()
+        message = "\(succeeded) / \(targets.count)枚を「トリミングしない」にしました"
     }
 
     // MARK: - Level

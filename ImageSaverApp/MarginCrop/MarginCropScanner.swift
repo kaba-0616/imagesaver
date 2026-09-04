@@ -14,7 +14,7 @@ final class MarginCropScanner: ObservableObject {
     enum Phase: Equatable {
         case idle
         case counting
-        case scanning(done: Int, total: Int)
+        case scanning(done: Int, total: Int, remaining: TimeInterval?)
         case ready
     }
 
@@ -36,6 +36,7 @@ final class MarginCropScanner: ObservableObject {
     @Published private(set) var candidates: [MarginCropCandidate] = []
     @Published private(set) var access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @Published private(set) var level: Int = MarginLevel.stored()
+    @Published private(set) var skippedCount = 0
 
     private let skipped = MarginCropSkipped()
     /// Bumped on every `scan()`; a scan whose background pass reports back
@@ -59,6 +60,7 @@ final class MarginCropScanner: ObservableObject {
 
     func scan() {
         skipped.loadIfNeeded()
+        skippedCount = skipped.count
         scanToken += 1
         let token = scanToken
         phase = .counting
@@ -68,13 +70,13 @@ final class MarginCropScanner: ObservableObject {
         let counted: @Sendable (Int) -> Void = { [weak self] total in
             Task { @MainActor in
                 guard let self, self.scanToken == token else { return }
-                self.phase = .scanning(done: 0, total: total)
+                self.phase = .scanning(done: 0, total: total, remaining: nil)
             }
         }
-        let progress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+        let progress: @Sendable (Int, Int, TimeInterval?) -> Void = { [weak self] done, total, remaining in
             Task { @MainActor in
                 guard let self, self.scanToken == token else { return }
-                self.phase = .scanning(done: done, total: total)
+                self.phase = .scanning(done: done, total: total, remaining: remaining)
             }
         }
         let finished: @Sendable ([MarginCropCandidate]) -> Void = { [weak self] found in
@@ -97,6 +99,23 @@ final class MarginCropScanner: ObservableObject {
         switch await skipped.add(candidate.localIdentifier) {
         case .saved:
             candidates.removeAll { $0.id == candidate.id }
+            skippedCount = skipped.count
+            return .done
+        case .busy:
+            return .failed("処理中です。少し待ってからもう一度お試しください")
+        case .storeFull:
+            return .failed("記録できる上限に達しました")
+        case .failed(let text):
+            return .failed(text)
+        }
+    }
+
+    /// Settings screen: forgets every "これはトリミングしない" decision so
+    /// those photos can be offered again on the next scan.
+    func clearSkipped() async -> ApplyOutcome {
+        switch await skipped.removeAll() {
+        case .saved:
+            skippedCount = 0
             return .done
         case .busy:
             return .failed("処理中です。少し待ってからもう一度お試しください")
@@ -133,11 +152,17 @@ final class MarginCropScanner: ObservableObject {
         let oriented = source.oriented(forExifOrientation: input.fullSizeImageOrientation)
         let cropRect = candidate.cropRect
         // `cropRect` was computed in the asset's own pixelWidth/pixelHeight
-        // space (top-left origin, the PHAsset/UIKit convention). CIImage's
-        // coordinate space is bottom-left, so the Y origin is flipped here
-        // against the already-reoriented image's own height.
-        let ciCropRect = CGRect(x: cropRect.origin.x,
-                                 y: oriented.extent.height - cropRect.origin.y - cropRect.height,
+        // space (top-left origin, Y down -- the PHAsset/UIKit convention).
+        // CIImage's coordinate space is bottom-left, Y up, so the Y origin is
+        // flipped here. Anchored on `extent.minX`/`.maxY` rather than
+        // assuming the extent starts at (0, 0): `.oriented(forExifOrientation:)`
+        // can shift the image to a non-zero origin, and measuring from a
+        // fixed origin left a strip of the original margin uncropped on one
+        // edge (or clipped into real content on the opposite one) whenever
+        // that offset was non-zero.
+        let extent = oriented.extent
+        let ciCropRect = CGRect(x: extent.minX + cropRect.minX,
+                                 y: extent.maxY - cropRect.maxY,
                                  width: cropRect.width,
                                  height: cropRect.height)
         let cropped = oriented.cropped(to: ciCropRect)
@@ -185,17 +210,36 @@ final class MarginCropScanner: ObservableObject {
         level: Int,
         skipped: Set<String>,
         counted: @escaping @Sendable (Int) -> Void,
-        progress: @escaping @Sendable (Int, Int) -> Void,
+        progress: @escaping @Sendable (Int, Int, TimeInterval?) -> Void,
         finished: @escaping @Sendable ([MarginCropCandidate]) -> Void
     ) {
+        let started = CFAbsoluteTimeGetCurrent()
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         let assets = PHAsset.fetchAssets(with: .image, options: options)
         let total = assets.count
-        counted(total)
 
         var cache = MarginCropCache.load()
+
+        // Same two-population estimate DuplicateScanner.performScan uses:
+        // a cache hit costs nothing next to actually fetching and detecting,
+        // so averaging them together would make an early estimate wrong by a
+        // mile. This first pass only asks "is it already cached", nothing
+        // decoded yet.
+        var toCompute = 0
+        assets.enumerateObjects { asset, _, _ in
+            guard !skipped.contains(asset.localIdentifier) else { return }
+            if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset) { return }
+            toCompute += 1
+        }
+        counted(total)
+
         var found: [MarginCropCandidate] = []
+        var computeAverage: TimeInterval = 0
+        var computeSamples = 0
+        var reuseAverage: TimeInterval = 0
+        var reuseSamples = 0
+        let smoothing = 0.1
 
         let manager = PHImageManager.default()
         let requestOptions = PHImageRequestOptions()
@@ -208,7 +252,32 @@ final class MarginCropScanner: ObservableObject {
         let target = CGSize(width: 512, height: 512)
 
         assets.enumerateObjects { asset, index, _ in
-            defer { if index % 25 == 0 { progress(index + 1, total) } }
+            let itemStarted = CFAbsoluteTimeGetCurrent()
+            var wasComputed = false
+            defer {
+                let spent = CFAbsoluteTimeGetCurrent() - itemStarted
+                if wasComputed {
+                    computeAverage = computeSamples == 0 ? spent : computeAverage + smoothing * (spent - computeAverage)
+                    computeSamples += 1
+                } else {
+                    reuseAverage = reuseSamples == 0 ? spent : reuseAverage + smoothing * (spent - reuseAverage)
+                    reuseSamples += 1
+                }
+                if index % 25 == 0 {
+                    let elapsed = CFAbsoluteTimeGetCurrent() - started
+                    let toReuse = max(0, total - toCompute)
+                    let negligible = max(20, total / 100)
+                    let sampled = (toCompute < negligible || computeSamples >= min(20, toCompute))
+                        && (toReuse < negligible || reuseSamples >= min(20, toReuse))
+                    var remaining: TimeInterval?
+                    if sampled && elapsed >= 2 {
+                        let computeLeft = max(0, toCompute - computeSamples)
+                        let reuseLeft = max(0, toReuse - reuseSamples)
+                        remaining = Double(computeLeft) * computeAverage + Double(reuseLeft) * reuseAverage
+                    }
+                    progress(index + 1, total, remaining)
+                }
+            }
             guard !skipped.contains(asset.localIdentifier) else { return }
 
             if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset) {
@@ -221,6 +290,7 @@ final class MarginCropScanner: ObservableObject {
                 return
             }
 
+            wasComputed = true
             let box = ThumbnailBox()
             let waiter = DispatchSemaphore(value: 0)
             manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFit,
@@ -250,7 +320,7 @@ final class MarginCropScanner: ObservableObject {
         }
         // Every 25th photo is reported, so without this the bar stops short
         // of 100% and sits there until `finished` lands.
-        progress(total, total)
+        progress(total, total, nil)
 
         if total > 0 { MarginCropCache.save(cache) }
         finished(found)

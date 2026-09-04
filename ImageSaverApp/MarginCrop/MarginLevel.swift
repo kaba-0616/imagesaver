@@ -51,4 +51,15 @@ enum MarginLevel {
     static func varianceLimit(for level: Int) -> Int {
         500 - clamp(level) * 40
     }
+
+    /// How far a line's three color channels may spread apart (0 = pure
+    /// gray/white/black, 255 = a fully saturated single-channel color)
+    /// before it stops counting as a margin at all, regardless of level. A
+    /// colored studio backdrop can be exactly as flat and uniform edge to
+    /// edge as a real letterbox bar -- this is what keeps that from being
+    /// read as one. Not tied to the strictness slider: this feature only
+    /// ever claimed to find white/black/gray bars (see the reference photos
+    /// this was designed against), so a looser detection level should catch
+    /// noisier near-gray bars, not colored backgrounds.
+    static let saturationLimit = 40
 }
