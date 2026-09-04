@@ -23,8 +23,8 @@ struct MarginResult: Equatable, Codable {
 }
 
 /// Finds a uniform-color margin on each of a photo's four edges
-/// independently, by walking in from each edge one line at a time and
-/// stopping where the color stops matching the outermost line closely enough.
+/// independently, by requiring the boundary between the margin and the real
+/// photo to be a straight line all the way across -- see `marginDepth`.
 ///
 /// A separate, self-contained pass rather than a reuse of
 /// `ImageHash.cropProfiles`: that one reduces a photo to a coarse 32-column
@@ -113,29 +113,76 @@ enum MarginDetector {
         return Line(r: meanR, g: meanG, b: meanB, variance: variance, saturation: saturation)
     }
 
-    /// Walks in from `edge`, one line at a time, stopping at the first line
-    /// that is either too varied to be flat margin, or whose average color
-    /// has drifted too far from the outermost line -- whichever comes first.
+    /// A synthetic bar added to the whole image crosses every column (for a
+    /// top/bottom edge) or every row (for a left/right edge) at very nearly
+    /// the same depth -- it is a straight seam by construction. A photo's
+    /// own background, even when it is just as uniformly colored, only
+    /// continues until the subject's silhouette interrupts it, and a
+    /// silhouette is not a straight line: how far the background goes before
+    /// hitting hair, a raised arm, a shoulder varies from column to column.
+    /// This measures each column/row's own depth independently and only
+    /// trusts the result when those depths agree closely enough to call the
+    /// boundary a straight line -- which is what a colored studio backdrop,
+    /// however uniform, essentially never manages to do across the whole
+    /// width or height at once.
     private static func marginDepth(rows: [[UInt8]], width: Int, height: Int,
                                      from edge: Edge, tolerance: Int, varianceLimit: Int) -> Int {
-        let lineCount = (edge == .top || edge == .bottom) ? height : width
-        guard lineCount > 0 else { return 0 }
+        let isHorizontal = edge == .top || edge == .bottom
+        let lineCount = isHorizontal ? height : width
+        let sampleCount = isHorizontal ? width : height
+        guard lineCount > 0, sampleCount > 0 else { return 0 }
 
         let saturationLimit = Double(MarginLevel.saturationLimit)
         let outermost = edge == .bottom || edge == .right ? lineCount - 1 : 0
         let baseline = line(outermost, rows: rows, width: width, height: height, edge: edge)
         guard baseline.variance <= Double(varianceLimit), baseline.saturation <= saturationLimit else { return 0 }
 
-        var depth = 0
-        for step in 0..<lineCount {
-            let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
-            let current = line(index, rows: rows, width: width, height: height, edge: edge)
-            guard current.variance <= Double(varianceLimit), current.saturation <= saturationLimit else { break }
-            let diff = abs(current.r - baseline.r) + abs(current.g - baseline.g) + abs(current.b - baseline.b)
-            guard diff <= Double(tolerance) else { break }
-            depth = step + 1
+        // A 3-wide average across the sample axis, not a single pixel --
+        // compression noise on one bare pixel would otherwise stop a column
+        // short for no reason connected to where the real edge is.
+        func sampledColor(index: Int, sample: Int) -> (r: Double, g: Double, b: Double) {
+            var sumR = 0, sumG = 0, sumB = 0, count = 0
+            for delta in -1...1 {
+                let s = sample + delta
+                guard s >= 0, s < sampleCount else { continue }
+                let (x, y): (Int, Int) = isHorizontal ? (s, index) : (index, s)
+                let row = rows[y]
+                let offset = x * 4
+                sumR += Int(row[offset]); sumG += Int(row[offset + 1]); sumB += Int(row[offset + 2])
+                count += 1
+            }
+            return (Double(sumR) / Double(count), Double(sumG) / Double(count), Double(sumB) / Double(count))
         }
-        return depth
+
+        var depths: [Int] = []
+        depths.reserveCapacity(sampleCount)
+        for sample in 0..<sampleCount {
+            var depth = 0
+            for step in 0..<lineCount {
+                let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
+                let pixel = sampledColor(index: index, sample: sample)
+                let diff = abs(pixel.r - baseline.r) + abs(pixel.g - baseline.g) + abs(pixel.b - baseline.b)
+                guard diff <= Double(tolerance) else { break }
+                depth = step + 1
+            }
+            depths.append(depth)
+        }
+
+        let sorted = depths.sorted()
+        guard let shallowest = sorted.first, shallowest > 0 else { return 0 }
+        let meanDepth = Double(depths.reduce(0, +)) / Double(depths.count)
+        let spread = depths.reduce(0.0) { $0 + abs(Double($1) - meanDepth) } / Double(depths.count)
+        // A little slack for anti-aliasing/noise right at the seam -- a real
+        // straight bar will not disagree by more than a few percent of its
+        // own depth from one column to the next; a silhouette disagrees by a
+        // lot, since it is tracing a shape, not a line.
+        let allowedSpread = max(2.0, meanDepth * 0.12)
+        guard spread <= allowedSpread else { return 0 }
+
+        // The shallowest column/row is the safe cut line: trusting the
+        // average instead could still shave into the one column where the
+        // subject actually starts earliest.
+        return shallowest
     }
 
     /// `rows[y]` is one scanline of `width*4` bytes (RGB + one padding byte
