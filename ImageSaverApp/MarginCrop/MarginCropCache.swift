@@ -10,14 +10,27 @@ struct MarginCropCacheEntry: Codable {
     let modificationDate: Date?
     let width: Int
     let height: Int
+    /// The `MarginLevel` this entry was computed at -- a cache hit only
+    /// counts as fresh when this still matches the level currently in
+    /// effect, otherwise a slider change would silently keep serving
+    /// verdicts computed at the old level forever (nothing else about the
+    /// photo would have changed to invalidate it).
+    let level: Int
     let margin: MarginResult?
 }
 
 enum MarginCropCache {
 
-    /// Bump if `MarginCropCacheEntry`'s shape changes in a way old entries
-    /// cannot fill in on their own.
-    private static let currentVersion = 1
+    /// Bump whenever `MarginDetector`'s actual detection behavior changes
+    /// (thresholds, the Vision pass, anything that can change what a given
+    /// photo at a given level decides) -- not just when `MarginCropCacheEntry`'s
+    /// shape changes. A stale verdict from an earlier algorithm version looks
+    /// exactly like a fresh one to `isFresh` (same photo, same level), so
+    /// changing the algorithm without bumping this meant re-scans kept
+    /// serving results computed under the old logic. Bumped to 2 for the
+    /// build144-149 detector history (aggressive-loosening → Vision gate →
+    /// threshold revert) that shipped without ever bumping this.
+    private static let currentVersion = 2
     private static let versionKey = "marginCropCacheVersion"
     private static var fileURL: URL? { PhotoScanStore.url("margincrop.json") }
 

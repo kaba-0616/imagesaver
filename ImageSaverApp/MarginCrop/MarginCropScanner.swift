@@ -240,7 +240,7 @@ final class MarginCropScanner: ObservableObject {
         var toCompute = 0
         assets.enumerateObjects { asset, _, _ in
             guard !skipped.contains(asset.localIdentifier) else { return }
-            if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset) { return }
+            if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset, level: level) { return }
             toCompute += 1
         }
         counted(total)
@@ -291,7 +291,7 @@ final class MarginCropScanner: ObservableObject {
             }
             guard !skipped.contains(asset.localIdentifier) else { return }
 
-            if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset) {
+            if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset, level: level) {
                 if let margin = cached.margin {
                     found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
                                                       width: cached.width, height: cached.height,
@@ -321,6 +321,7 @@ final class MarginCropScanner: ObservableObject {
             cache[asset.localIdentifier] = MarginCropCacheEntry(modificationDate: asset.modificationDate,
                                                                  width: asset.pixelWidth,
                                                                  height: asset.pixelHeight,
+                                                                 level: level,
                                                                  margin: margin)
             if let margin {
                 found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
@@ -358,9 +359,10 @@ final class MarginCropScanner: ObservableObject {
         finished(found)
     }
 
-    private nonisolated static func isFresh(_ entry: MarginCropCacheEntry, for asset: PHAsset) -> Bool {
+    private nonisolated static func isFresh(_ entry: MarginCropCacheEntry, for asset: PHAsset, level: Int) -> Bool {
         entry.modificationDate == asset.modificationDate
             && entry.width == asset.pixelWidth && entry.height == asset.pixelHeight
+            && entry.level == level
     }
 }
 
