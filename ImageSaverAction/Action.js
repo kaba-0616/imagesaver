@@ -112,19 +112,19 @@ Action.prototype = {
         // tell these avatars apart from the post's own photos by link target.
         // Their box size can, though: the roster is always laid out as a grid
         // of small round avatars, while an actual diary photo is shown large.
-        // Raised from 220, then 300: the roster highlights whichever
-        // member's own page this is with a visibly larger avatar (plus a
-        // ring around it), pushing its box past both. A real diary photo
-        // still comfortably clears this on any device width, so there is
-        // room to raise it further without risking the post's own content.
-        var MEMBER_AVATAR_MAX_BOX = 420;
+        var MEMBER_AVATAR_MAX_BOX = 300;
 
         function isMemberAvatar(el) {
             if (!hostHasMemberWidget()) { return false; }
             var rect;
             try { rect = el.getBoundingClientRect(); } catch (e) { return false; }
-            return rect.width > 0 && rect.width <= MEMBER_AVATAR_MAX_BOX
-                && rect.height > 0 && rect.height <= MEMBER_AVATAR_MAX_BOX;
+            // No `> 0` floor: the page hides the roster entry it does not
+            // want listed (e.g. the current member, shown large elsewhere
+            // instead) via `display:none` rather than removing it, which
+            // collapses its box to 0x0 -- excluded, not exempted, same as an
+            // ordinary small avatar.
+            return rect.width <= MEMBER_AVATAR_MAX_BOX
+                && rect.height <= MEMBER_AVATAR_MAX_BOX;
         }
 
         // Some CMSs serve every picture through a resize endpoint with the
