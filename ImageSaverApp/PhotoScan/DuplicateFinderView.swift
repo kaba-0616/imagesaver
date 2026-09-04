@@ -516,6 +516,7 @@ struct DuplicateFinderView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
+            .padding(.top, 8)
             Text("判定のレベルを変えると、一度「違う」とした組が再び出ることがあります。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
@@ -544,6 +545,8 @@ struct DuplicateFinderView: View {
                 }
             }
             .font(.caption)
+            .foregroundColor(.secondary)
+            .padding(.top, 24)
             .disabled(scanner.phase != .ready || scanner.isSweepRunning)
             #endif
         }
