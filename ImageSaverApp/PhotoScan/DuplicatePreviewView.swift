@@ -75,7 +75,18 @@ struct DuplicatePreviewView: View {
     @State private var browseDirection = 1
     @State private var lastKnownIndex: Int
 
-    private var pages: [Page] {
+    /// Flattened once and cached rather than recomputed on every body
+    /// evaluation. This used to be a computed property re-running
+    /// `groups.flatMap` on every access -- and there are more than a dozen
+    /// of those per render (plus several more inside a single
+    /// `rejectAndAdvance` call) -- an O(total photos) cost on every one of
+    /// them. Invisible at a strict level's few hundred photos, it became
+    /// felt lag once a loose level pushed the flattened count into the
+    /// thousands. The only place `groups` changes after init is the removal
+    /// in `rejectAndAdvance`, which keeps this in sync by hand.
+    @State private var pages: [Page]
+
+    private static func flattenPages(_ groups: [DuplicateGroup]) -> [Page] {
         groups.flatMap { group in group.displayOrder.map { Page(groupID: group.id, member: $0) } }
     }
 
@@ -87,6 +98,7 @@ struct DuplicatePreviewView: View {
         self.scanner = scanner
         self.onClose = onClose
         _groups = State(initialValue: groups)
+        _pages = State(initialValue: Self.flattenPages(groups))
 
         let groupIndex = min(max(startGroupIndex, 0), max(groups.count - 1, 0))
         var flat = 0
@@ -543,6 +555,7 @@ struct DuplicatePreviewView: View {
                 // elsewhere during the round trip.
                 let currentPage = pages[index]
                 groups.remove(at: removedIndex)
+                pages = Self.flattenPages(groups)
                 hiddenGroupIDs.remove(groupID)
                 index = pages.firstIndex(where: {
                     $0.groupID == currentPage.groupID
