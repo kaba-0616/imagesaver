@@ -2,7 +2,14 @@ import SwiftUI
 import Photos
 
 struct ContentView: View {
-    @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+    // .readWrite, not .addOnly: the duplicate finder below needs full access
+    // regardless, and asking for .addOnly here first used to mean two
+    // separate permission prompts (add-only now, then a second upgrade to
+    // full access the first time "写真の重複を整理" is opened) -- each an
+    // extra round trip that a sideloaded free-signed build's every reinstall
+    // makes the user sit through again. One prompt, covering both, is what
+    // this screen asks for now.
+    @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
 
     var body: some View {
         NavigationView {
@@ -38,7 +45,7 @@ struct ContentView: View {
                 // itself, so it has to be granted here first.
                 Section {
                     HStack {
-                        Label("写真への保存", systemImage: statusIcon)
+                        Label("写真へのアクセス", systemImage: statusIcon)
                             .foregroundColor(statusColor)
                         Spacer()
                         Text(statusText)
@@ -46,9 +53,9 @@ struct ContentView: View {
                     }
 
                     if photoStatus == .notDetermined {
-                        Button("写真への保存を許可する") {
+                        Button("写真へのアクセスを許可する") {
                             Task {
-                                photoStatus = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+                                photoStatus = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
                             }
                         }
                     } else if photoStatus == .denied || photoStatus == .restricted {
@@ -61,7 +68,7 @@ struct ContentView: View {
                 } header: {
                     Text("必要な許可")
                 } footer: {
-                    Text("共有シートから保存する前に、ここで写真への保存を許可しておく必要があります。")
+                    Text("共有シートから保存する前と、「写真の重複を整理」を使う前、両方でここでの許可が必要です。1回の許可でどちらにも使えます。")
                 }
 
                 Section("バージョン") {
@@ -76,7 +83,7 @@ struct ContentView: View {
             }
             .navigationTitle("ImageSaver")
             .onAppear {
-                photoStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+                photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
             }
         }
     }
