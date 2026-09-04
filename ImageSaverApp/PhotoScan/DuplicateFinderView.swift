@@ -532,6 +532,16 @@ struct DuplicateFinderView: View {
             Text("判定のレベルを変えると、一度「違う」とした組が再び出ることがあります。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
+            // The slider moves freely on its own -- only "この設定で照合" (or
+            // closing and reopening after a level change elsewhere) actually
+            // re-matches. Without this, dragging the slider and closing the
+            // popover without confirming leaves no trace that the results on
+            // screen are still from the old level.
+            if levelValue != scanner.level {
+                Text("表示中の結果はレベル\(scanner.level)のものです")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
             Button("この設定で照合") {
                 // Only actually recomputes when the level changed; unchanged,
                 // it still serves as a plain manual re-match (same as the
