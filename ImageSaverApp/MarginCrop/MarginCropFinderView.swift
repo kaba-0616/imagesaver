@@ -7,6 +7,16 @@ import SwiftUI
 /// page from "写真の重複を整理" on purpose -- this judges one photo at a
 /// time, not a relationship between photos, and mixing the two would make
 /// neither screen's tab picker mean anything simple.
+/// A snapshot of the candidates open when a card is tapped, plus which one
+/// was tapped -- lets `MarginCropPreviewView` swipe through the whole run
+/// without reflecting every scanner mutation (an applied/skipped candidate)
+/// back into the list this screen is browsing mid-swipe.
+private struct PreviewTarget: Identifiable {
+    let items: [MarginCropCandidate]
+    let startIndex: Int
+    var id: String { items[startIndex].id }
+}
+
 struct MarginCropFinderView: View {
 
     @StateObject private var scanner = MarginCropScanner()
@@ -15,7 +25,7 @@ struct MarginCropFinderView: View {
     @State private var showingLevelPicker = false
     @State private var levelDisplay = Double(MarginLevel.stored())
     @State private var message: String?
-    @State private var preview: MarginCropCandidate?
+    @State private var preview: PreviewTarget?
     @State private var showingSettings = false
     @State private var showingLog = false
 
@@ -45,8 +55,8 @@ struct MarginCropFinderView: View {
                     }
                 }
             }
-            .fullScreenCover(item: $preview) { candidate in
-                MarginCropPreviewView(scanner: scanner, candidate: candidate) {
+            .fullScreenCover(item: $preview) { target in
+                MarginCropPreviewView(scanner: scanner, items: target.items, startIndex: target.startIndex) {
                     preview = nil
                 }
             }
@@ -206,7 +216,11 @@ struct MarginCropFinderView: View {
             ZStack(alignment: .top) {
                 AssetThumbnail(identifier: candidate.localIdentifier, side: 150, generation: 0)
                     .cornerRadius(8)
-                    .onTapGesture { preview = candidate }
+                    .onTapGesture {
+                        let items = scanner.candidates
+                        guard let startIndex = items.firstIndex(where: { $0.id == candidate.id }) else { return }
+                        preview = PreviewTarget(items: items, startIndex: startIndex)
+                    }
                 HStack {
                     Button { toggle(candidate) } label: {
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")

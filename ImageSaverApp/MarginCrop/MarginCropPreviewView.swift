@@ -1,34 +1,64 @@
 import Photos
 import SwiftUI
 
-/// Full-screen before/after check for one candidate, reached by tapping its
-/// card. "Before" shows the detected margin as a red overlay on the original;
+/// Full-screen before/after check for a run of candidates, reached by
+/// tapping a card. Swipeable left/right to move on to the next candidate
+/// without closing and reopening -- the same continuous-browsing idea
+/// `DuplicatePreviewView` uses for duplicate groups, adapted for a flat list
+/// instead of paged groups.
+///
+/// "Before" shows the detected margin as a red overlay on the original;
 /// "after" shows a locally-cropped preview of the same photo -- a display-
 /// only render, not what actually gets written (`MarginCropScanner.apply`
 /// redoes the crop from the full-resolution original independently, through
 /// `PHContentEditingInput`, once the user actually confirms here).
 struct MarginCropPreviewView: View {
     @ObservedObject var scanner: MarginCropScanner
-    let candidate: MarginCropCandidate
     let onClose: () -> Void
 
-    @State private var image: UIImage?
-    @State private var showingAfter = false
+    /// A mutable copy of the candidates open when this screen was
+    /// presented -- `scanner.candidates` itself is left alone so the list
+    /// behind this screen does not reflow mid-browse.
+    @State private var pages: [MarginCropCandidate]
+    @State private var index: Int
+    /// Candidates whose "トリミングする"/"これはトリミングしない" has
+    /// already been sent to the scanner but not yet actually removed from
+    /// `pages` -- see `advance(from:)`. `TabView(.page)` on iOS is known
+    /// (from this project's own `DuplicatePreviewView` history) to not
+    /// reliably repaint a page-count change and a selection change made in
+    /// the same state update, so the selection is always moved first, on
+    /// its own, and the array is only shrunk afterward once the selection
+    /// has already moved away from the removed page.
+    @State private var processedIDs: Set<String> = []
     @State private var toast: String?
     @State private var busy = false
+    @State private var showingAfter = false
     /// Which background the photo sits against. A white margin can hide
     /// against a light backdrop and a black one against a dark backdrop --
     /// switching this is how a check can actually see either edge clearly.
     @State private var backgroundIsWhite = false
+
+    init(scanner: MarginCropScanner, items: [MarginCropCandidate], startIndex: Int, onClose: @escaping () -> Void) {
+        self.scanner = scanner
+        self.onClose = onClose
+        _pages = State(initialValue: items)
+        _index = State(initialValue: startIndex)
+    }
+
+    private var candidate: MarginCropCandidate? { pages.indices.contains(index) ? pages[index] : nil }
 
     var body: some View {
         ZStack {
             (backgroundIsWhite ? Color.white : Color.black).ignoresSafeArea()
             VStack(spacing: 0) {
                 topBar
-                Spacer(minLength: 0)
-                photo
-                Spacer(minLength: 0)
+                TabView(selection: $index) {
+                    ForEach(Array(pages.enumerated()), id: \.element.id) { i, page in
+                        MarginCropPhotoPage(candidate: page, showingAfter: showingAfter)
+                            .tag(i)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
                 if let toast {
                     Text(toast)
                         .font(.caption)
@@ -42,7 +72,7 @@ struct MarginCropPreviewView: View {
                 bottomBar
             }
         }
-        .onAppear { load() }
+        .onChange(of: pages.isEmpty) { empty in if empty { onClose() } }
     }
 
     /// The one color everything in this overlay chrome uses -- flips with
@@ -66,37 +96,6 @@ struct MarginCropPreviewView: View {
             }
         }
         .padding(16)
-    }
-
-    @ViewBuilder
-    private var photo: some View {
-        if let image {
-            if showingAfter {
-                if let cropped = croppedImage(image) {
-                    Image(uiImage: cropped)
-                        .resizable()
-                        .scaledToFit()
-                        .padding()
-                } else {
-                    Text("プレビューを作成できませんでした")
-                        .foregroundColor(foreground)
-                }
-            } else {
-                GeometryReader { geometry in
-                    let fit = fitSize(for: image.size, in: geometry.size)
-                    ZStack {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                        marginOverlay(fitSize: fit)
-                    }
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                }
-                .padding()
-            }
-        } else {
-            ProgressView().tint(foreground)
-        }
     }
 
     /// A plain `Picker(.segmented)` on a black backdrop is what prompted
@@ -125,6 +124,125 @@ struct MarginCropPreviewView: View {
                 .cornerRadius(6)
         }
         .buttonStyle(.plain)
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                Task { await runSkip() }
+            } label: {
+                Text("これはトリミングしない")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(foreground)
+
+            Button {
+                Task { await runApply() }
+            } label: {
+                Text("トリミングする")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(16)
+        .disabled(busy || candidate == nil)
+    }
+
+    private func runSkip() async {
+        guard let candidate else { return }
+        busy = true
+        let outcome = await scanner.skip(candidate)
+        busy = false
+        await advance(candidate, outcome: outcome)
+    }
+
+    private func runApply() async {
+        guard let candidate else { return }
+        busy = true
+        let outcome = await scanner.apply(candidate)
+        busy = false
+        await advance(candidate, outcome: outcome)
+    }
+
+    /// Moves off the just-processed candidate immediately (pure selection
+    /// change) so the swipe view feels instant, then -- once the backend
+    /// call has actually confirmed -- shrinks `pages` for real. On failure,
+    /// the optimistic move is rolled back and the candidate stays put with
+    /// an error toast, mirroring `DuplicatePreviewView.rejectAndAdvance`.
+    private func advance(_ candidate: MarginCropCandidate, outcome: MarginCropScanner.ApplyOutcome) async {
+        guard outcome == .done else {
+            toast = outcome.describe()
+            return
+        }
+        let previousIndex = index
+        processedIDs.insert(candidate.id)
+        if let next = nextUnprocessedIndex() {
+            index = next
+        }
+        if let removeAt = pages.firstIndex(where: { $0.id == candidate.id }) {
+            let stayOnID = pages.indices.contains(index) ? pages[index].id : nil
+            pages.remove(at: removeAt)
+            processedIDs.remove(candidate.id)
+            if let stayOnID, let newIndex = pages.firstIndex(where: { $0.id == stayOnID }) {
+                index = newIndex
+            } else {
+                index = min(previousIndex, max(pages.count - 1, 0))
+            }
+        }
+    }
+
+    private func nextUnprocessedIndex() -> Int? {
+        guard !pages.isEmpty else { return nil }
+        for offset in 1...pages.count {
+            let candidateIndex = (index + offset) % pages.count
+            if !processedIDs.contains(pages[candidateIndex].id) { return candidateIndex }
+        }
+        return nil
+    }
+}
+
+/// One page of the swipeable preview: loads and shows a single candidate's
+/// photo, either with the detected margin highlighted or a locally-cropped
+/// preview. Split out from `MarginCropPreviewView` because each page needs
+/// its own independently-loaded image, keyed to its own candidate.
+private struct MarginCropPhotoPage: View {
+    let candidate: MarginCropCandidate
+    let showingAfter: Bool
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                if showingAfter {
+                    if let cropped = croppedImage(image) {
+                        Image(uiImage: cropped)
+                            .resizable()
+                            .scaledToFit()
+                            .padding()
+                    } else {
+                        Text("プレビューを作成できませんでした")
+                            .foregroundColor(.white)
+                    }
+                } else {
+                    GeometryReader { geometry in
+                        let fit = fitSize(for: image.size, in: geometry.size)
+                        ZStack {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                            marginOverlay(fitSize: fit)
+                        }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                    .padding()
+                }
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .task(id: candidate.id) { load() }
     }
 
     private func fitSize(for imageSize: CGSize, in bounds: CGSize) -> CGSize {
@@ -170,43 +288,6 @@ struct MarginCropPreviewView: View {
                                  width: rect.width * scaleX, height: rect.height * scaleY).integral
         guard let cropped = cgImage.cropping(to: scaledRect) else { return nil }
         return UIImage(cgImage: cropped, scale: source.scale, orientation: source.imageOrientation)
-    }
-
-    private var bottomBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                Task { await runSkip() }
-            } label: {
-                Text("これはトリミングしない")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(foreground)
-
-            Button {
-                Task { await runApply() }
-            } label: {
-                Text("トリミングする")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .padding(16)
-        .disabled(busy)
-    }
-
-    private func runSkip() async {
-        busy = true
-        let outcome = await scanner.skip(candidate)
-        busy = false
-        if outcome == .done { onClose() } else { toast = outcome.describe() }
-    }
-
-    private func runApply() async {
-        busy = true
-        let outcome = await scanner.apply(candidate)
-        busy = false
-        if outcome == .done { onClose() } else { toast = outcome.describe() }
     }
 
     private func load() {

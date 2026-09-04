@@ -43,21 +43,27 @@ enum MarginLevel {
     /// Briefly loosened to 90-level*7 in build144 on the theory that the
     /// straight-line consistency check alone was enough of a guard -- a real
     /// device run at that setting found ~48% of an 184k-photo library
-    /// "detected" (a clearly absurd rate), so this is back to its original
-    /// value. What actually needed loosening for "cut closer to the real
-    /// edge" was the depth cap/floor below, not how easily something counts
-    /// as a margin at all -- conflating the two was the mistake.
+    /// "detected" (a clearly absurd rate), so this went back to its original
+    /// 60-level*5. What actually needed loosening for "cut closer to the
+    /// real edge" was the depth cap/floor below, not how easily something
+    /// counts as a margin at all -- conflating the two was the mistake.
+    /// Tightened once more, pre-emptively, to 45-level*4: a later run at the
+    /// original value found a large-but-uncounted number of candidates (the
+    /// per-run log cap swallowed the final count before it could be read --
+    /// see `MarginCropScanner`'s detection-log cap), so this moves a step
+    /// stricter without data to measure against yet. Revisit once a real
+    /// total count is available.
     static func colorTolerance(for level: Int) -> Int {
-        60 - clamp(level) * 5
+        45 - clamp(level) * 4
     }
 
     /// Highest allowed per-line color variance before a line is judged too
     /// detailed to be part of a flat margin (a gradient sky, a textured
     /// wall, say) -- guards low tolerance from still matching real content
-    /// that happens to average out near the edge color. Back to its
-    /// original value for the same reason as `colorTolerance`.
+    /// that happens to average out near the edge color. Tightened alongside
+    /// `colorTolerance` for the same pre-emptive reason.
     static func varianceLimit(for level: Int) -> Int {
-        500 - clamp(level) * 40
+        400 - clamp(level) * 35
     }
 
     /// How far a line's three color channels may spread apart (0 = pure
@@ -68,9 +74,9 @@ enum MarginLevel {
     /// read as one. Not tied to the strictness slider: this feature only
     /// ever claimed to find white/black/gray bars (see the reference photos
     /// this was designed against), so a looser detection level should catch
-    /// noisier near-gray bars, not colored backgrounds. Back to its original
-    /// 40 for the same reason as `colorTolerance` -- see `MarginDetector`'s
-    /// Vision pass for the layer that is now the actual second line of
-    /// defense against colored backdrops (a mandatory gate, not this).
-    static let saturationLimit = 40
+    /// noisier near-gray bars, not colored backgrounds. Tightened from 40 to
+    /// 30 alongside `colorTolerance`, for the same pre-emptive reason --
+    /// `MarginDetector`'s Vision pass is only an optional, best-effort
+    /// confirmation now (see `reconcile`), not a gate this can lean on.
+    static let saturationLimit = 30
 }

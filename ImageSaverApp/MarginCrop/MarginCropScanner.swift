@@ -218,6 +218,11 @@ final class MarginCropScanner: ObservableObject {
     /// `performScan`.
     private enum ComputeKind { case fast, vision }
 
+    /// Caps the number of detailed "余白検出: ..." lines a single scan
+    /// writes -- see `performScan`'s use of it, and the comment above where
+    /// it is checked.
+    private static let maxDetectionLogLines = 200
+
     private nonisolated static func performScan(
         level: Int,
         skipped: Set<String>,
@@ -358,22 +363,45 @@ final class MarginCropScanner: ObservableObject {
                                                   width: asset.pixelWidth, height: asset.pixelHeight,
                                                   creationDate: asset.creationDate,
                                                   margin: margin))
-                // Only the freshly-computed detections are logged, not cache
-                // hits replayed on every re-scan -- this is meant to be read
-                // for tuning the detector against real photos, and repeating
-                // the same line every run would just bury the new ones.
-                let shortID = String(asset.localIdentifier.prefix(8))
-                Task { @MainActor in
-                    var line = "余白検出: \(shortID) \(asset.pixelWidth)x\(asset.pixelHeight) "
-                        + "上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)"
-                    // Only Vision actually narrowing/dropping an edge is
-                    // worth a line of its own; a plain confirmation or a
-                    // photo Vision had nothing to say about would just
-                    // repeat the same information for every candidate.
-                    if let note, note != "Visionが一致を確認" {
-                        line += " (\(note))"
+                // Only the freshly-computed detections are logged in detail,
+                // not cache hits replayed on every re-scan -- this is meant
+                // to be read for tuning the detector against real photos,
+                // and repeating the same line every run would just bury the
+                // new ones. `found.count` (which does include cache hits) is
+                // also what caps how many detailed lines get written: a
+                // library with a few hundred candidates would otherwise fill
+                // `PhotoScanLog`'s whole per-run budget (300 lines) with
+                // individual detections and silently lose the one line that
+                // actually says how many were found in total -- which is
+                // exactly what happened on a real run and prompted this cap.
+                let count = found.count
+                if count <= Self.maxDetectionLogLines {
+                    let shortID = String(asset.localIdentifier.prefix(8))
+                    Task { @MainActor in
+                        var line = "余白検出: \(shortID) \(asset.pixelWidth)x\(asset.pixelHeight) "
+                            + "上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)"
+                        // Only Vision actually narrowing/dropping an edge is
+                        // worth a line of its own; a plain confirmation or a
+                        // photo Vision had nothing to say about would just
+                        // repeat the same information for every candidate.
+                        if let note, note != "Visionが一致を確認" {
+                            line += " (\(note))"
+                        }
+                        PhotoScanLog.shared.note(line)
                     }
-                    PhotoScanLog.shared.note(line)
+                } else if count == Self.maxDetectionLogLines + 1 {
+                    Task { @MainActor in
+                        PhotoScanLog.shared.note("(以降の検出はログを省略、件数のみ集計)")
+                    }
+                } else if (count - Self.maxDetectionLogLines) % 200 == 0 {
+                    // A running checkpoint independent of the final
+                    // "スキャン完了" line -- if the scan never gets to write
+                    // that line (the app is killed, the user leaves before
+                    // it finishes), this is still there to say how many had
+                    // been found so far.
+                    Task { @MainActor in
+                        PhotoScanLog.shared.note("(集計中) 現在までの検出件数: \(count)件")
+                    }
                 }
             }
         }

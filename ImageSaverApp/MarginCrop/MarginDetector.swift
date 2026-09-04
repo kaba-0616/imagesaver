@@ -224,9 +224,23 @@ enum MarginDetector {
             return (Double(sumR) / Double(count), Double(sumG) / Double(count), Double(sumB) / Double(count))
         }
 
+        // Excludes the corners from the straight-line check: when all four
+        // edges carry a margin, the columns/rows nearest a corner are also
+        // inside the *perpendicular* margin, so the same border color can
+        // continue far deeper there than along the true edge (often for the
+        // image's entire remaining height/width). That drags the corner
+        // samples' depth far away from the middle ones and blows out
+        // `spread` below, rejecting a real four-sided border outright --
+        // exactly the failure a real-device run showed (only two-sided
+        // top/bottom or left/right borders were ever detected, never all
+        // four at once). A two-sided border has no such interference, so
+        // restricting to the central samples changes nothing for it.
+        let cornerFraction = sampleCount / 6
+        let sampleRange = cornerFraction..<max(cornerFraction + 1, sampleCount - cornerFraction)
+
         var depths: [Int] = []
-        depths.reserveCapacity(sampleCount)
-        for sample in 0..<sampleCount {
+        depths.reserveCapacity(sampleRange.count)
+        for sample in sampleRange {
             var depth = 0
             for step in 0..<lineCount {
                 let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
@@ -245,10 +259,11 @@ enum MarginDetector {
         // Slack for anti-aliasing/noise right at the seam -- a real straight
         // bar will not disagree by much from one column to the next; a
         // silhouette disagrees by a lot, since it is tracing a shape, not a
-        // line. Briefly loosened to 0.2 in build144; back to 0.12 along with
-        // `MarginLevel`'s thresholds after a real-device run at the loose
-        // settings flagged ~48% of an entire library.
-        let allowedSpread = max(2.0, meanDepth * 0.12)
+        // line. Briefly loosened to 0.2 in build144, reverted to 0.12; now
+        // tightened further to 0.10 pre-emptively (no on-device count to
+        // measure against yet -- see `MarginLevel`'s thresholds for the
+        // same reasoning) alongside the corner exclusion above.
+        let allowedSpread = max(2.0, meanDepth * 0.10)
         guard spread <= allowedSpread else { return 0 }
 
         // The shallowest column/row is the safe cut line: trusting the
