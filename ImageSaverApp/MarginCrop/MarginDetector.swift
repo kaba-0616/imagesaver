@@ -106,18 +106,26 @@ enum MarginDetector {
 
     private typealias EdgeDepths = (top: Int, bottom: Int, left: Int, right: Int)
 
-    /// Combines the color-based candidate with Vision's rectangle, when it
-    /// found one. Vision is a confirming signal, never an additional gate on
-    /// its own: when it fails to find a usable axis-aligned rectangle at all
-    /// (low confidence, tilted, or nothing rectangular there), the color
-    /// result passes through unchanged, since a low-saturation but genuine
-    /// border does not need Vision's help to be trusted. When Vision *does*
-    /// find one, each edge is only kept where both agree there is a margin
-    /// (the smaller, more conservative depth wins); an edge where Vision
-    /// disagrees is dropped rather than trusted from the color pass alone.
+    /// Combines the color-based candidate with Vision's rectangle. Vision is
+    /// a mandatory gate, not an optional confirmation: a first version let
+    /// the color result pass through unchanged whenever Vision failed to
+    /// find a rectangle, on the theory that a low-saturation genuine border
+    /// does not need Vision's help. In practice that meant Vision filtered
+    /// nothing, because the false positives it was meant to catch --
+    /// ordinary photos with a softly uniform edge (sky, a wall, a blurred
+    /// background) -- are exactly the photos Vision also fails to find a
+    /// confident rectangle in, so they sailed through both checks. A real
+    /// run at that setting flagged ~48% of an 184k-photo library. Requiring
+    /// Vision to actually confirm each edge is the fix: a real synthetic
+    /// bar is a sharp, high-contrast, dead-straight seam -- exactly what
+    /// Vision's rectangle detector is built to find -- so genuine margins
+    /// should still confirm at a good rate, while a merely-uniform natural
+    /// background usually will not produce a rectangle at all.
     private static func reconcile(pixel: EdgeDepths, vision: EdgeDepths?,
                                    minRows: Int, minCols: Int) -> (EdgeDepths, String?) {
-        guard let vision else { return (pixel, nil) }
+        guard let vision else {
+            return ((top: 0, bottom: 0, left: 0, right: 0), "Vision未検出のため見送り: 色\(pixel)")
+        }
 
         func agreed(_ pixelDepth: Int, _ visionDepth: Int, floor: Int) -> Int {
             guard pixelDepth > 0, visionDepth >= floor else { return 0 }
@@ -232,10 +240,10 @@ enum MarginDetector {
         // Slack for anti-aliasing/noise right at the seam -- a real straight
         // bar will not disagree by much from one column to the next; a
         // silhouette disagrees by a lot, since it is tracing a shape, not a
-        // line. Loosened from 0.12 to 0.2: real photos still show some
-        // per-column jitter at the seam, and being too strict here was
-        // throwing out genuine bars along with silhouettes.
-        let allowedSpread = max(3.0, meanDepth * 0.2)
+        // line. Briefly loosened to 0.2 in build144; back to 0.12 along with
+        // `MarginLevel`'s thresholds after a real-device run at the loose
+        // settings flagged ~48% of an entire library.
+        let allowedSpread = max(2.0, meanDepth * 0.12)
         guard spread <= allowedSpread else { return 0 }
 
         // The shallowest column/row is the safe cut line: trusting the
