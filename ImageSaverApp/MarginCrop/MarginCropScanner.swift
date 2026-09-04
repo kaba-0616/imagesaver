@@ -213,6 +213,11 @@ final class MarginCropScanner: ObservableObject {
 
     private static let queue = DispatchQueue(label: "jp.kaba.imagesaver.margincrop.scan", qos: .userInitiated)
 
+    /// Which of the two very different costs a freshly-computed (not cached)
+    /// photo actually incurred -- see the time-estimate split in
+    /// `performScan`.
+    private enum ComputeKind { case fast, vision }
+
     private nonisolated static func performScan(
         level: Int,
         skipped: Set<String>,
@@ -246,8 +251,17 @@ final class MarginCropScanner: ObservableObject {
         counted(total)
 
         var found: [MarginCropCandidate] = []
-        var computeAverage: TimeInterval = 0
-        var computeSamples = 0
+        // Split three ways rather than the plain compute/reuse split
+        // DuplicateScanner uses: unlike a fingerprint (roughly the same cost
+        // regardless of content), "compute" here is itself bimodal -- most
+        // photos are rejected by the cheap color pass alone, while the rare
+        // ones that reach Vision's inference cost meaningfully more. Lumping
+        // both into one average made the remaining-time estimate swing
+        // wildly whenever a batch of 25 happened to include a Vision call.
+        var fastComputeAverage: TimeInterval = 0
+        var fastComputeSamples = 0
+        var visionComputeAverage: TimeInterval = 0
+        var visionComputeSamples = 0
         var reuseAverage: TimeInterval = 0
         var reuseSamples = 0
         let smoothing = 0.1
@@ -264,27 +278,43 @@ final class MarginCropScanner: ObservableObject {
 
         assets.enumerateObjects { asset, index, _ in
             let itemStarted = CFAbsoluteTimeGetCurrent()
-            var wasComputed = false
+            var computeKind: ComputeKind?
             defer {
                 let spent = CFAbsoluteTimeGetCurrent() - itemStarted
-                if wasComputed {
-                    computeAverage = computeSamples == 0 ? spent : computeAverage + smoothing * (spent - computeAverage)
-                    computeSamples += 1
-                } else {
+                switch computeKind {
+                case .fast:
+                    fastComputeAverage = fastComputeSamples == 0 ? spent
+                        : fastComputeAverage + smoothing * (spent - fastComputeAverage)
+                    fastComputeSamples += 1
+                case .vision:
+                    visionComputeAverage = visionComputeSamples == 0 ? spent
+                        : visionComputeAverage + smoothing * (spent - visionComputeAverage)
+                    visionComputeSamples += 1
+                case nil:
                     reuseAverage = reuseSamples == 0 ? spent : reuseAverage + smoothing * (spent - reuseAverage)
                     reuseSamples += 1
                 }
                 if index % 25 == 0 {
                     let elapsed = CFAbsoluteTimeGetCurrent() - started
                     let toReuse = max(0, total - toCompute)
+                    let computeSamples = fastComputeSamples + visionComputeSamples
                     let negligible = max(20, total / 100)
                     let sampled = (toCompute < negligible || computeSamples >= min(20, toCompute))
                         && (toReuse < negligible || reuseSamples >= min(20, toReuse))
                     var remaining: TimeInterval?
                     if sampled && elapsed >= 2 {
-                        let computeLeft = max(0, toCompute - computeSamples)
+                        // The share of not-yet-computed photos that will end
+                        // up needing Vision is unknown ahead of time (finding
+                        // that out costs as much as just computing it), so
+                        // it is estimated from the ratio seen so far and
+                        // split proportionally across the two buckets.
+                        let visionRatio = computeSamples > 0 ? Double(visionComputeSamples) / Double(computeSamples) : 0
+                        let computeLeft = Double(max(0, toCompute - computeSamples))
+                        let visionLeft = computeLeft * visionRatio
+                        let fastLeft = computeLeft - visionLeft
                         let reuseLeft = max(0, toReuse - reuseSamples)
-                        remaining = Double(computeLeft) * computeAverage + Double(reuseLeft) * reuseAverage
+                        remaining = fastLeft * fastComputeAverage + visionLeft * visionComputeAverage
+                            + Double(reuseLeft) * reuseAverage
                     }
                     progress(index + 1, total, remaining)
                 }
@@ -301,7 +331,6 @@ final class MarginCropScanner: ObservableObject {
                 return
             }
 
-            wasComputed = true
             let box = ThumbnailBox()
             let waiter = DispatchSemaphore(value: 0)
             manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFit,
@@ -314,10 +343,11 @@ final class MarginCropScanner: ObservableObject {
             // a late callback's write off a captured local var.
             _ = waiter.wait(timeout: .now() + 5)
 
-            let (margin, note) = box.take().map {
+            let (margin, note, ranVision) = box.take().map {
                 MarginDetector.detect(in: $0, realWidth: asset.pixelWidth,
                                        realHeight: asset.pixelHeight, level: level)
-            } ?? (nil, nil)
+            } ?? (nil, nil, false)
+            computeKind = ranVision ? .vision : .fast
             cache[asset.localIdentifier] = MarginCropCacheEntry(modificationDate: asset.modificationDate,
                                                                  width: asset.pixelWidth,
                                                                  height: asset.pixelHeight,

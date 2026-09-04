@@ -27,10 +27,10 @@ enum MarginCropCache {
     /// shape changes. A stale verdict from an earlier algorithm version looks
     /// exactly like a fresh one to `isFresh` (same photo, same level), so
     /// changing the algorithm without bumping this meant re-scans kept
-    /// serving results computed under the old logic. Bumped to 2 for the
-    /// build144-149 detector history (aggressive-loosening → Vision gate →
-    /// threshold revert) that shipped without ever bumping this.
-    private static let currentVersion = 2
+    /// serving results computed under the old logic. Bumped to 3: Vision's
+    /// mandatory-gate experiment (version 2) is reverted back to an optional
+    /// confirmation.
+    private static let currentVersion = 3
     private static let versionKey = "marginCropCacheVersion"
     private static var fileURL: URL? { PhotoScanStore.url("margincrop.json") }
 

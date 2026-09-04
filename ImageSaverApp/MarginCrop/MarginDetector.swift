@@ -40,15 +40,21 @@ enum MarginDetector {
     /// fetch size) -- this reads it at whatever resolution it is given.
     ///
     /// The second element is a short diagnostic note, non-nil only when
-    /// Vision's rectangle detector actually changed the outcome (confirmed,
-    /// narrowed, or dropped an edge the color pass alone found) -- meant to
-    /// be logged so a real-device run shows which cases Vision affected,
-    /// without a line for every ordinary confirmation.
-    static func detect(in image: CGImage, realWidth: Int, realHeight: Int, level: Int) -> (MarginResult?, String?) {
+    /// Vision's rectangle detector actually changed the outcome (narrowed an
+    /// edge the color pass alone found, or confirmed it unchanged) -- meant
+    /// to be logged so a real-device run shows which cases Vision affected,
+    /// without a line for every photo it never even ran on.
+    ///
+    /// The third element says whether Vision actually ran (only once the
+    /// color pass alone already has a candidate) -- exposed so the caller
+    /// can keep a separate time estimate for the Vision-inference photos,
+    /// whose per-photo cost is otherwise very different from the majority
+    /// that the color pass rejects immediately.
+    static func detect(in image: CGImage, realWidth: Int, realHeight: Int, level: Int) -> (MarginResult?, String?, Bool) {
         let sampleWidth = image.width
         let sampleHeight = image.height
-        guard sampleWidth > 8, sampleHeight > 8, realWidth > 0, realHeight > 0 else { return (nil, nil) }
-        guard let rows = pixelRows(of: image, width: sampleWidth, height: sampleHeight) else { return (nil, nil) }
+        guard sampleWidth > 8, sampleHeight > 8, realWidth > 0, realHeight > 0 else { return (nil, nil, false) }
+        guard let rows = pixelRows(of: image, width: sampleWidth, height: sampleHeight) else { return (nil, nil, false) }
 
         let tolerance = MarginLevel.colorTolerance(for: level)
         let varianceLimit = MarginLevel.varianceLimit(for: level)
@@ -82,18 +88,18 @@ enum MarginDetector {
         let bottom = bottomDepth >= minRows ? min(bottomDepth, capRows) : 0
         let left = leftDepth >= minCols ? min(leftDepth, capCols) : 0
         let right = rightDepth >= minCols ? min(rightDepth, capCols) : 0
-        guard top > 0 || bottom > 0 || left > 0 || right > 0 else { return (nil, nil) }
+        guard top > 0 || bottom > 0 || left > 0 || right > 0 else { return (nil, nil, false) }
 
         let pixelResult = (top: top, bottom: bottom, left: left, right: right)
 
         // Vision is only ever asked to confirm or narrow a candidate the
-        // color pass already found -- see `reconcile` -- so it costs nothing
-        // on the large majority of ordinary, margin-free photos that never
-        // reach this point.
+        // color pass already found -- so it costs nothing on the large
+        // majority of ordinary, margin-free photos that never reach this
+        // point.
         let vision = detectRectangle(in: image, sampleWidth: sampleWidth, sampleHeight: sampleHeight)
         let (final, note) = reconcile(pixel: pixelResult, vision: vision,
                                        minRows: minRows, minCols: minCols)
-        guard final.top > 0 || final.bottom > 0 || final.left > 0 || final.right > 0 else { return (nil, note) }
+        guard final.top > 0 || final.bottom > 0 || final.left > 0 || final.right > 0 else { return (nil, note, true) }
 
         let scaleX = Double(realWidth) / Double(sampleWidth)
         let scaleY = Double(realHeight) / Double(sampleHeight)
@@ -101,31 +107,30 @@ enum MarginDetector {
                                    bottom: Int((Double(final.bottom) * scaleY).rounded()),
                                    left: Int((Double(final.left) * scaleX).rounded()),
                                    right: Int((Double(final.right) * scaleX).rounded()))
-        return (result, note)
+        return (result, note, true)
     }
 
     private typealias EdgeDepths = (top: Int, bottom: Int, left: Int, right: Int)
 
     /// Combines the color-based candidate with Vision's rectangle. Vision is
-    /// a mandatory gate, not an optional confirmation: a first version let
-    /// the color result pass through unchanged whenever Vision failed to
-    /// find a rectangle, on the theory that a low-saturation genuine border
-    /// does not need Vision's help. In practice that meant Vision filtered
-    /// nothing, because the false positives it was meant to catch --
-    /// ordinary photos with a softly uniform edge (sky, a wall, a blurred
-    /// background) -- are exactly the photos Vision also fails to find a
-    /// confident rectangle in, so they sailed through both checks. A real
-    /// run at that setting flagged ~48% of an 184k-photo library. Requiring
-    /// Vision to actually confirm each edge is the fix: a real synthetic
-    /// bar is a sharp, high-contrast, dead-straight seam -- exactly what
-    /// Vision's rectangle detector is built to find -- so genuine margins
-    /// should still confirm at a good rate, while a merely-uniform natural
-    /// background usually will not produce a rectangle at all.
+    /// an optional confirmation, not a gate on its own: a version that made
+    /// it mandatory (drop the whole candidate whenever Vision found nothing
+    /// usable) was tried and made things worse on a real device -- genuine
+    /// synthetic borders, especially a letterbox/pillarbox where two of the
+    /// rectangle's four sides coincide with the image's own edges, turned
+    /// out to be a *degenerate*, hard-to-confirm case for a detector tuned
+    /// to find a document-like shape floating free inside a photo, while an
+    /// actual free-floating rectangle inside an ordinary photo (a sign, a
+    /// window, a screen) -- exactly the source of false positives -- is
+    /// precisely what Vision confirms *easily*. Making Vision mandatory
+    /// therefore dropped real borders while doing little against the false
+    /// positives it was meant to catch. Vision now only ever narrows a
+    /// result the strict color-based thresholds already trust on their own;
+    /// when Vision has nothing to say, the color result passes through
+    /// unchanged.
     private static func reconcile(pixel: EdgeDepths, vision: EdgeDepths?,
                                    minRows: Int, minCols: Int) -> (EdgeDepths, String?) {
-        guard let vision else {
-            return ((top: 0, bottom: 0, left: 0, right: 0), "Vision未検出のため見送り: 色\(pixel)")
-        }
+        guard let vision else { return (pixel, nil) }
 
         func agreed(_ pixelDepth: Int, _ visionDepth: Int, floor: Int) -> Int {
             guard pixelDepth > 0, visionDepth >= floor else { return 0 }
