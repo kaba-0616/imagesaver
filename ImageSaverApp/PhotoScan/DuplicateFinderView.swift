@@ -98,6 +98,13 @@ struct DuplicateFinderView: View {
                     Button { showsCheckboxes.toggle() } label: {
                         Image(systemName: showsCheckboxes ? "checkmark.circle" : "circle.dashed")
                     }
+                    // The regroup scrim only covers the results content, not
+                    // the nav bar chrome above it -- these three buttons need
+                    // their own guard or they stay live above the blocked
+                    // list. The back arrow is the one control left reachable
+                    // on purpose, and it is not one of these (it is the
+                    // system back button, outside this toolbar entirely).
+                    .disabled(scanner.regrouping != nil)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     // Reachable regardless of phase: the footer copy of this
@@ -107,11 +114,13 @@ struct DuplicateFinderView: View {
                     Button { showingLog = true } label: {
                         Image(systemName: "doc.text")
                     }
+                    .disabled(scanner.regrouping != nil)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
                         Image(systemName: "gearshape")
                     }
+                    .disabled(scanner.regrouping != nil)
                 }
             }
             .fullScreenCover(item: $preview) { target in
