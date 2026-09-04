@@ -44,6 +44,13 @@ final class MarginCropScanner: ObservableObject {
     /// `DuplicateScanner.groupToken` uses for the same reason.
     private var scanToken = 0
 
+    /// Shares `PhotoScanLog` with `DuplicateScanner` on purpose -- one log
+    /// the user already knows how to copy out of the app, rather than a
+    /// second store for this feature alone.
+    init() {
+        PhotoScanLog.shared.beginRun()
+    }
+
     func requestAccess() async {
         access = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     }
@@ -219,6 +226,10 @@ final class MarginCropScanner: ObservableObject {
         let assets = PHAsset.fetchAssets(with: .image, options: options)
         let total = assets.count
 
+        Task { @MainActor in
+            PhotoScanLog.shared.note("余白スキャン開始: レベル\(level) 対象\(total)枚")
+        }
+
         var cache = MarginCropCache.load()
 
         // Same two-population estimate DuplicateScanner.performScan uses:
@@ -316,6 +327,16 @@ final class MarginCropScanner: ObservableObject {
                                                   width: asset.pixelWidth, height: asset.pixelHeight,
                                                   creationDate: asset.creationDate,
                                                   margin: margin))
+                // Only the freshly-computed detections are logged, not cache
+                // hits replayed on every re-scan -- this is meant to be read
+                // for tuning the detector against real photos, and repeating
+                // the same line every run would just bury the new ones.
+                let shortID = String(asset.localIdentifier.prefix(8))
+                Task { @MainActor in
+                    PhotoScanLog.shared.note(
+                        "余白検出: \(shortID) \(asset.pixelWidth)x\(asset.pixelHeight) "
+                        + "上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)")
+                }
             }
         }
         // Every 25th photo is reported, so without this the bar stops short
@@ -323,6 +344,10 @@ final class MarginCropScanner: ObservableObject {
         progress(total, total, nil)
 
         if total > 0 { MarginCropCache.save(cache) }
+        let foundCount = found.count
+        Task { @MainActor in
+            PhotoScanLog.shared.note("余白スキャン完了: 検出\(foundCount)件")
+        }
         finished(found)
     }
 

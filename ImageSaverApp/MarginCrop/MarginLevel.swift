@@ -40,8 +40,13 @@ enum MarginLevel {
 
     /// Highest allowed sum-of-channel difference (0...765) between an edge
     /// line and the outermost line before the margin is considered broken.
+    /// Loosened from an initial 60-level*5: the straight-line consistency
+    /// check in `MarginDetector.marginDepth` is what actually guards against
+    /// false positives now, so this can afford to be generous about per-pixel
+    /// noise near the seam instead of stopping short and leaving a sliver of
+    /// margin uncropped.
     static func colorTolerance(for level: Int) -> Int {
-        60 - clamp(level) * 5
+        90 - clamp(level) * 7
     }
 
     /// Highest allowed per-line color variance before a line is judged too
@@ -49,7 +54,7 @@ enum MarginLevel {
     /// wall, say) -- guards low tolerance from still matching real content
     /// that happens to average out near the edge color.
     static func varianceLimit(for level: Int) -> Int {
-        500 - clamp(level) * 40
+        700 - clamp(level) * 50
     }
 
     /// How far a line's three color channels may spread apart (0 = pure
@@ -60,6 +65,9 @@ enum MarginLevel {
     /// read as one. Not tied to the strictness slider: this feature only
     /// ever claimed to find white/black/gray bars (see the reference photos
     /// this was designed against), so a looser detection level should catch
-    /// noisier near-gray bars, not colored backgrounds.
-    static let saturationLimit = 40
+    /// noisier near-gray bars, not colored backgrounds. Loosened from an
+    /// initial 40 -- the straight-line check is the real defense against
+    /// colored backdrops now, so this only needs to keep out strongly
+    /// saturated colors, not near-gray ones.
+    static let saturationLimit = 70
 }

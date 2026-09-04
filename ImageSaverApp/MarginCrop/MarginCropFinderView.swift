@@ -17,6 +17,7 @@ struct MarginCropFinderView: View {
     @State private var message: String?
     @State private var preview: MarginCropCandidate?
     @State private var showingSettings = false
+    @State private var showingLog = false
 
     var body: some View {
         content
@@ -29,6 +30,7 @@ struct MarginCropFinderView: View {
                     scanner.scan()
                 }
             }
+            .onDisappear { PhotoScanLog.shared.flush() }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingLevelPicker = true } label: {
@@ -51,6 +53,9 @@ struct MarginCropFinderView: View {
             .sheet(isPresented: $showingSettings) {
                 settingsSheet
             }
+            .sheet(isPresented: $showingLog) {
+                PhotoScanLogSheet(log: PhotoScanLog.shared) { showingLog = false }
+            }
     }
 
     private var settingsSheet: some View {
@@ -70,6 +75,12 @@ struct MarginCropFinderView: View {
                         }
                     }
                     .disabled(scanner.skippedCount == 0)
+                }
+                Section {
+                    Button("ログ") {
+                        showingSettings = false
+                        showingLog = true
+                    }
                 }
             }
             .navigationTitle("設定")

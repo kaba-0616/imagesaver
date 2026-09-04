@@ -55,15 +55,21 @@ enum MarginDetector {
         let rightDepth = marginDepth(rows: rows, width: sampleWidth, height: sampleHeight,
                                       from: .right, tolerance: tolerance, varianceLimit: varianceLimit)
 
-        // Never eat more than ~45% out of one side -- a genuinely dark or
+        // Never eat more than ~60% out of one side -- a genuinely dark or
         // plain photo (a night sky, a studio backdrop) should not be able to
-        // vanish entirely just because it is uniform edge to edge.
-        let capRows = sampleHeight * 9 / 20
-        let capCols = sampleWidth * 9 / 20
-        // A margin has to be at least ~1.5% of that edge's own dimension to
-        // count -- a few pixels of compression fringe is not a bar.
-        let minRows = max(2, sampleHeight * 3 / 200)
-        let minCols = max(2, sampleWidth * 3 / 200)
+        // vanish entirely just because it is uniform edge to edge. Raised
+        // from an initial 45%: the straight-line check already rejects a
+        // silhouette-shaped boundary, so this cap only needs to stop a
+        // truly edge-to-edge flat photo from disappearing, not second-guess
+        // a real bar that happens to be deep.
+        let capRows = sampleHeight * 3 / 5
+        let capCols = sampleWidth * 3 / 5
+        // A margin has to be at least ~1% of that edge's own dimension to
+        // count -- a few pixels of compression fringe is not a bar. Lowered
+        // from ~1.5% so thin bars are not thrown out before the straight-line
+        // check even gets to see them.
+        let minRows = max(2, sampleHeight / 100)
+        let minCols = max(2, sampleWidth / 100)
 
         let top = topDepth >= minRows ? min(topDepth, capRows) : 0
         let bottom = bottomDepth >= minRows ? min(bottomDepth, capRows) : 0
@@ -172,11 +178,13 @@ enum MarginDetector {
         guard let shallowest = sorted.first, shallowest > 0 else { return 0 }
         let meanDepth = Double(depths.reduce(0, +)) / Double(depths.count)
         let spread = depths.reduce(0.0) { $0 + abs(Double($1) - meanDepth) } / Double(depths.count)
-        // A little slack for anti-aliasing/noise right at the seam -- a real
-        // straight bar will not disagree by more than a few percent of its
-        // own depth from one column to the next; a silhouette disagrees by a
-        // lot, since it is tracing a shape, not a line.
-        let allowedSpread = max(2.0, meanDepth * 0.12)
+        // Slack for anti-aliasing/noise right at the seam -- a real straight
+        // bar will not disagree by much from one column to the next; a
+        // silhouette disagrees by a lot, since it is tracing a shape, not a
+        // line. Loosened from 0.12 to 0.2: real photos still show some
+        // per-column jitter at the seam, and being too strict here was
+        // throwing out genuine bars along with silhouettes.
+        let allowedSpread = max(3.0, meanDepth * 0.2)
         guard spread <= allowedSpread else { return 0 }
 
         // The shallowest column/row is the safe cut line: trusting the
