@@ -269,15 +269,18 @@ final class MarginCropScanner: ObservableObject {
             + "adjustmentData=\(input.adjustmentData != nil)] "
             + "output[url存在=\(FileManager.default.fileExists(atPath: output.renderedContentURL.path)) "
             + "サイズ=\(writtenSize)bytes 元データ=\(data.count)bytes]")
-        // build163's non-empty JSON adjustmentData changed the failure from
-        // 3303 (missingResource) to 3302 (unconfirmed exact meaning, but a
-        // *different* code proves Photos got further before rejecting it --
-        // the adjustmentData itself is being validated, not ignored). Next
-        // cheap variant: the simplest possible non-empty payload, to see
-        // whether a JSON-parseable byte sequence specifically is what gets
-        // rejected, versus any non-empty payload at all.
-        output.adjustmentData = PHAdjustmentData(formatIdentifier: "jp.kaba.imagesaver.margincrop",
-                                                  formatVersion: "1", data: Data([0]))
+        // `adjustmentData` left unset. Every non-empty payload tried (a JSON
+        // blob in build163, a single byte in build165) failed identically
+        // with 3302 instead of 3303 -- proving adjustmentData's mere
+        // presence flips which error code Photos reports, not the root
+        // cause of the failure itself. 6 independent variables across as
+        // many builds (Live Photo exclusion, PNG-format matching, and three
+        // adjustmentData states) have now all failed to produce a single
+        // successful trim, with `NSError.userInfo` staying empty throughout
+        // -- there is nothing further to learn about this from inside the
+        // app without a device sysdiagnose/Console.app, which this Windows-
+        // only setup cannot get to. Left unset as the simplest of the three
+        // states with no observed downside.
         return await performCropChange(asset: asset, output: output, shortID: shortID, candidateID: candidate.id, attempt: 1)
     }
 
