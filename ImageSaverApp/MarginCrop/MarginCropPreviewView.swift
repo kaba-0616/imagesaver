@@ -7,11 +7,12 @@ import SwiftUI
 /// `DuplicatePreviewView` uses for duplicate groups, adapted for a flat list
 /// instead of paged groups.
 ///
-/// "Before" shows the detected margin as a red overlay on the original;
-/// "after" shows a locally-cropped preview of the same photo -- a display-
-/// only render, not what actually gets written (`MarginCropScanner.apply`
-/// redoes the crop from the full-resolution original independently, through
-/// `PHContentEditingInput`, once the user actually confirms here).
+/// "Before" shows the plain, unmodified photo; "after" overlays the
+/// detected margin in red on the same photo, so what would be cut is
+/// judged against the real image rather than a separately rendered local
+/// crop (`MarginCropScanner.apply` redoes the actual crop from the
+/// full-resolution original independently, through `PHContentEditingInput`,
+/// once the user confirms here).
 struct MarginCropPreviewView: View {
     @ObservedObject var scanner: MarginCropScanner
     let onClose: () -> Void
@@ -202,10 +203,10 @@ struct MarginCropPreviewView: View {
     }
 }
 
-/// One page of the swipeable preview: loads and shows a single candidate's
-/// photo, either with the detected margin highlighted or a locally-cropped
-/// preview. Split out from `MarginCropPreviewView` because each page needs
-/// its own independently-loaded image, keyed to its own candidate.
+/// One page of the swipeable preview: loads a single candidate's photo and
+/// shows it plain or with the detected margin highlighted, depending on
+/// `showingAfter`. Split out from `MarginCropPreviewView` because each page
+/// needs its own independently-loaded image, keyed to its own candidate.
 private struct MarginCropPhotoPage: View {
     let candidate: MarginCropCandidate
     let showingAfter: Bool
@@ -215,29 +216,26 @@ private struct MarginCropPhotoPage: View {
     var body: some View {
         Group {
             if let image {
-                if showingAfter {
-                    if let cropped = croppedImage(image) {
-                        Image(uiImage: cropped)
+                GeometryReader { geometry in
+                    let fit = fitSize(for: image.size, in: geometry.size)
+                    ZStack {
+                        Image(uiImage: image)
                             .resizable()
                             .scaledToFit()
-                            .padding()
-                    } else {
-                        Text("プレビューを作成できませんでした")
-                            .foregroundColor(.white)
-                    }
-                } else {
-                    GeometryReader { geometry in
-                        let fit = fitSize(for: image.size, in: geometry.size)
-                        ZStack {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
+                        // "トリミング前" is the plain photo with nothing
+                        // drawn on it; "トリミング後" shows what would be
+                        // cut via the same red overlay, rather than
+                        // rendering a separate local crop -- a cheap
+                        // downsampled crop was adding its own artifacts
+                        // that made judging the actual cut line harder, not
+                        // easier.
+                        if showingAfter {
                             marginOverlay(fitSize: fit)
                         }
-                        .frame(width: geometry.size.width, height: geometry.size.height)
                     }
-                    .padding()
+                    .frame(width: geometry.size.width, height: geometry.size.height)
                 }
+                .padding()
             } else {
                 ProgressView().tint(.white)
             }
@@ -274,20 +272,6 @@ private struct MarginCropPhotoPage: View {
             Color.red.opacity(0.4).frame(width: fitSize.width * rightFrac)
         }
         .frame(width: fitSize.width, height: fitSize.height)
-    }
-
-    /// `candidate.margin`/`cropRect` are in the asset's own full pixel space;
-    /// this preview image is very likely a smaller fetch, so the crop rect is
-    /// rescaled to whatever pixel size actually came back.
-    private func croppedImage(_ source: UIImage) -> UIImage? {
-        guard let cgImage = source.cgImage, candidate.width > 0, candidate.height > 0 else { return nil }
-        let scaleX = CGFloat(cgImage.width) / CGFloat(candidate.width)
-        let scaleY = CGFloat(cgImage.height) / CGFloat(candidate.height)
-        let rect = candidate.cropRect
-        let scaledRect = CGRect(x: rect.origin.x * scaleX, y: rect.origin.y * scaleY,
-                                 width: rect.width * scaleX, height: rect.height * scaleY).integral
-        guard let cropped = cgImage.cropping(to: scaledRect) else { return nil }
-        return UIImage(cgImage: cropped, scale: source.scale, orientation: source.imageOrientation)
     }
 
     private func load() {

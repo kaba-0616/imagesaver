@@ -33,8 +33,10 @@ enum MarginCropCache {
     /// tightened substantially to demand near-perfect flatness (see
     /// `MarginLevel.colorTolerance`) after a real run showed shape-based
     /// checks alone let through mostly-irrelevant candidates (skies, walls,
-    /// water -- also straight lines, just not synthetic ones).
-    private static let currentVersion = 5
+    /// water -- also straight lines, just not synthetic ones). Bumped to 6:
+    /// added a luminance gate (near-white/near-black only) after a real run
+    /// still flagged a naturally dark photo background as a margin.
+    private static let currentVersion = 6
     private static let versionKey = "marginCropCacheVersion"
     private static var fileURL: URL? { PhotoScanStore.url("margincrop.json") }
 

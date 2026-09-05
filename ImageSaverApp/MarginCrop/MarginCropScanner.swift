@@ -138,9 +138,19 @@ final class MarginCropScanner: ObservableObject {
     /// other photo-editing app on the device gives the user, rather than a
     /// bespoke undo this app would have to build and maintain itself.
     func apply(_ candidate: MarginCropCandidate) async -> ApplyOutcome {
+        // Every failure path also logs to `PhotoScanLog` -- this method is
+        // `@MainActor` already (the whole class is), so unlike
+        // `performScan`'s background-thread logging, no `Task { @MainActor
+        // in ... }` hop is needed here. Added after a real-device apply
+        // failed with nothing recorded to explain why.
+        let shortID = String(candidate.localIdentifier.prefix(8))
         let found = PHAsset.fetchAssets(withLocalIdentifiers: [candidate.localIdentifier], options: nil)
-        guard let asset = found.firstObject else { return .failed("写真が見つかりませんでした") }
+        guard let asset = found.firstObject else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 写真が見つかりません")
+            return .failed("写真が見つかりませんでした")
+        }
         guard asset.canPerform(.content) else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) この写真は編集できません")
             return .failed("この写真は編集できません")
         }
 
@@ -153,6 +163,7 @@ final class MarginCropScanner: ObservableObject {
         }
         guard let input, let imageURL = input.fullSizeImageURL,
               let source = CIImage(contentsOf: imageURL) else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 元画像の読み込みに失敗")
             return .failed("元画像の読み込みに失敗しました")
         }
 
@@ -175,9 +186,11 @@ final class MarginCropScanner: ObservableObject {
         let cropped = oriented.cropped(to: ciCropRect)
 
         guard let cgImage = CIContext().createCGImage(cropped, from: cropped.extent) else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) トリミング画像の生成に失敗")
             return .failed("トリミング画像の生成に失敗しました")
         }
         guard let data = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.95) else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 画像の書き出しに失敗")
             return .failed("画像の書き出しに失敗しました")
         }
 
@@ -189,6 +202,7 @@ final class MarginCropScanner: ObservableObject {
         do {
             try data.write(to: output.renderedContentURL, options: .atomic)
         } catch {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 書き込み失敗: \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
         // Identifies this app's own edits without claiming to be able to
@@ -204,7 +218,11 @@ final class MarginCropScanner: ObservableObject {
             candidates.removeAll { $0.id == candidate.id }
             return .done
         } catch {
-            if (error as NSError).code == NSUserCancelledError { return .cancelled }
+            if (error as NSError).code == NSUserCancelledError {
+                PhotoScanLog.shared.note("トリミングキャンセル: \(shortID)")
+                return .cancelled
+            }
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) performChanges失敗: \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
     }

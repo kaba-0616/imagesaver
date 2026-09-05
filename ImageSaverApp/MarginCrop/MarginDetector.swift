@@ -207,6 +207,24 @@ enum MarginDetector {
         let baseline = line(outermost, rows: rows, width: width, height: height, edge: edge)
         guard baseline.variance <= Double(varianceLimit), baseline.saturation <= saturationLimit else { return 0 }
 
+        // A synthetic white/black bar sits at the extreme ends of luminance;
+        // a photographed "black" background almost never does (ambient
+        // light bleed, JPEG noise, and color-profile shifts keep it a shade
+        // or two above true black). Uniformity alone (variance/saturation)
+        // could not tell a painted bar apart from a naturally dim/bright
+        // backdrop -- a real run flagged a dim portrait background while
+        // still missing a genuine four-sided black border -- so this adds a
+        // direct requirement that the color itself sit near one of the two
+        // extremes, on top of the existing gates. Guesses, not measured:
+        // revisit these two constants once real photos have been checked
+        // against them. A screenshot's own status bar (time/battery, often
+        // a near-black or near-white strip) is exactly the kind of margin
+        // this is meant to keep catching, not exclude.
+        let nearBlackMax = 40.0
+        let nearWhiteMin = 220.0
+        let luminance = (baseline.r + baseline.g + baseline.b) / 3
+        guard luminance <= nearBlackMax || luminance >= nearWhiteMin else { return 0 }
+
         // A 3-wide average across the sample axis, not a single pixel --
         // compression noise on one bare pixel would otherwise stop a column
         // short for no reason connected to where the real edge is.
