@@ -1,5 +1,6 @@
 import Photos
 import SwiftUI
+import UIKit
 
 /// The margin-trim screen: scans the library for photos with a detectable
 /// uniform-color margin (letterbox/pillarbox bars, or a border on all four
@@ -35,6 +36,7 @@ struct MarginCropFinderView: View {
     @State private var preview: PreviewTarget?
     @State private var showingSettings = false
     @State private var showingLog = false
+    @State private var isComputingLevelCounts = false
 
     var body: some View {
         content
@@ -103,6 +105,25 @@ struct MarginCropFinderView: View {
                     NavigationLink("診断: 写真を選んで判定値を見る") {
                         MarginDiagnosticView()
                     }
+                }
+                Section {
+                    Button {
+                        Task {
+                            isComputingLevelCounts = true
+                            let summary = await scanner.scanAllLevelsForDevSummary()
+                            UIPasteboard.general.string = summary
+                            isComputingLevelCounts = false
+                        }
+                    } label: {
+                        if isComputingLevelCounts {
+                            HStack { ProgressView(); Text("集計中…") }
+                        } else {
+                            Text("全レベルの検出件数をコピー(開発用)")
+                        }
+                    }
+                    .disabled(isComputingLevelCounts)
+                } footer: {
+                    Text("ライブラリ全体を一度スキャンし、レベル0〜10それぞれで検出される件数をまとめてコピーします。件数が多いライブラリでは時間がかかります。")
                 }
             }
             .navigationTitle("設定")
@@ -278,6 +299,7 @@ struct MarginCropFinderView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
+            undoRow
             HStack(spacing: 12) {
                 Button {
                     Task { await skipSelected() }
@@ -300,6 +322,32 @@ struct MarginCropFinderView: View {
         }
         .padding(12)
         .background(.bar)
+    }
+
+    /// Mirrors `DuplicateFinderView.undoRow` -- "取り消す" puts back the
+    /// most recently skipped candidate.
+    @ViewBuilder
+    private var undoRow: some View {
+        if scanner.canUndoSkip {
+            HStack(spacing: 8) {
+                Text("「トリミングしない」にした直近\(scanner.undoSkipDepth)件を取り消せます")
+                    .font(.footnote)
+                Spacer(minLength: 8)
+                Button("取り消す") { Task { await undoSkip() } }
+                    .font(.footnote.weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.12))
+            .cornerRadius(8)
+        }
+    }
+
+    private func undoSkip() async {
+        isMutatingGrid = true
+        let outcome = await scanner.undoSkip()
+        message = outcome == .done ? "「トリミングしない」を取り消しました" : outcome.describe()
+        isMutatingGrid = false
     }
 
     func apply(_ candidate: MarginCropCandidate) async {

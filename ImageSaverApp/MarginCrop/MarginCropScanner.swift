@@ -38,8 +38,21 @@ final class MarginCropScanner: ObservableObject {
     @Published private(set) var access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @Published private(set) var level: Int = MarginLevel.stored()
     @Published private(set) var skippedCount = 0
+    /// Set right after a "これはトリミングしない" so the view can offer one
+    /// step back, the same shape as `DuplicateScanner.canUndoRejection`.
+    @Published private(set) var canUndoSkip = false
+    /// How many skips back "取り消す" can currently walk -- `canUndoSkip`
+    /// alone only says "at least one".
+    var undoSkipDepth: Int { skipUndoStack.count }
 
     private let skipped = MarginCropSkipped()
+    /// Up to the last `maxSkipUndoDepth` skips, oldest first -- mirrors
+    /// `DuplicateScanner.undoStack`. Kept in memory only (not persisted):
+    /// `MarginCropSkipped.decisions`' own order is the thing `undoLast()`
+    /// actually removes from, this just remembers which `MarginCropCandidate`
+    /// and grid position to hand back to `candidates` when that happens.
+    private var skipUndoStack: [(candidate: MarginCropCandidate, position: Int)] = []
+    private static let maxSkipUndoDepth = 5
     /// Bumped on every `scan()`; a scan whose background pass reports back
     /// after a newer one has started is simply dropped, the same guard
     /// `DuplicateScanner.groupToken` uses for the same reason.
@@ -72,6 +85,11 @@ final class MarginCropScanner: ObservableObject {
     func scan() {
         skipped.loadIfNeeded()
         skippedCount = skipped.count
+        // A fresh `candidates` array makes every remembered grid position
+        // in `skipUndoStack` meaningless -- same reasoning as
+        // `DuplicateScanner.forgetUndo()`.
+        skipUndoStack.removeAll()
+        canUndoSkip = false
         scanToken += 1
         let token = scanToken
         phase = .counting
@@ -109,10 +127,16 @@ final class MarginCropScanner: ObservableObject {
     /// comment on why the margin, not just the identifier, is what gets
     /// recorded.
     func skip(_ candidate: MarginCropCandidate) async -> ApplyOutcome {
+        guard let position = candidates.firstIndex(where: { $0.id == candidate.id }) else {
+            return .failed("写真が見つかりませんでした")
+        }
         switch await skipped.add(candidate.localIdentifier, margin: candidate.margin) {
         case .saved:
-            candidates.removeAll { $0.id == candidate.id }
+            candidates.remove(at: position)
             skippedCount = skipped.count
+            skipUndoStack.append((candidate, position))
+            if skipUndoStack.count > Self.maxSkipUndoDepth { skipUndoStack.removeFirst() }
+            canUndoSkip = true
             return .done
         case .busy:
             return .failed("処理中です。少し待ってからもう一度お試しください")
@@ -123,12 +147,55 @@ final class MarginCropScanner: ObservableObject {
         }
     }
 
+    /// "取り消す": puts back the most recently skipped candidate, exactly
+    /// mirroring `DuplicateScanner.undoRejection()` -- restores the card at
+    /// (or as close as possible to, if the list has since shrunk) the grid
+    /// position it was removed from.
+    func undoSkip() async -> ApplyOutcome {
+        guard let last = skipUndoStack.last else { return .done }
+        switch await skipped.undoLast() {
+        case .saved:
+            candidates.insert(last.candidate, at: min(last.position, candidates.count))
+            skippedCount = skipped.count
+            skipUndoStack.removeLast()
+            canUndoSkip = !skipUndoStack.isEmpty
+            return .done
+        case .busy:
+            return .failed("処理中です。少し待ってからもう一度お試しください")
+        case .storeFull:
+            return .failed("記録できる上限に達しました")
+        case .failed(let text):
+            return .failed(text)
+        }
+    }
+
+    /// Developer-only: scans the whole library once and reports how many
+    /// photos would be offered as candidates at *each* detection level
+    /// 0-10, as a single copyable summary -- the same idea as
+    /// `MarginDiagnosticView`'s "全レベルをコピー", but for the aggregate
+    /// candidate count instead of one photo's edge values. Lets a
+    /// sensitivity choice be judged from real counts across the whole
+    /// library instead of rescanning by hand eleven times. Does not touch
+    /// `MarginCropCache` or `candidates` -- this is a read-only side
+    /// report, not a real scan.
+    func scanAllLevelsForDevSummary() async -> String {
+        await withCheckedContinuation { continuation in
+            Self.queue.async {
+                Self.computeAllLevelCounts { summary in
+                    continuation.resume(returning: summary)
+                }
+            }
+        }
+    }
+
     /// Settings screen: forgets every "これはトリミングしない" decision so
     /// those photos can be offered again on the next scan.
     func clearSkipped() async -> ApplyOutcome {
         switch await skipped.removeAll() {
         case .saved:
             skippedCount = 0
+            skipUndoStack.removeAll()
+            canUndoSkip = false
             return .done
         case .busy:
             return .failed("処理中です。少し待ってからもう一度お試しください")
@@ -563,6 +630,50 @@ final class MarginCropScanner: ObservableObject {
             PhotoScanLog.shared.note("余白スキャン完了: 検出\(foundCount)件")
         }
         finished(found)
+    }
+
+    /// One thumbnail fetch per photo, `MarginDetector.detect` run at every
+    /// level -- level 0 is the loosest (see `MarginLevel.colorTolerance`/
+    /// `minMatchFraction`, both monotonic in level), so a photo `detect`
+    /// rejects at level 0 is skipped entirely for the other ten rather than
+    /// re-running a detector that can only get stricter from there.
+    private nonisolated static func computeAllLevelCounts(completion: @escaping (String) -> Void) {
+        let options = PHFetchOptions()
+        let assets = PHAsset.fetchAssets(with: .image, options: options)
+        var counts = [Int](repeating: 0, count: 11)
+
+        let manager = PHImageManager.default()
+        let requestOptions = PHImageRequestOptions()
+        requestOptions.deliveryMode = .fastFormat
+        requestOptions.resizeMode = .fast
+        requestOptions.isNetworkAccessAllowed = false
+        let target = CGSize(width: 512, height: 512)
+
+        assets.enumerateObjects { asset, _, _ in
+            let box = ThumbnailBox()
+            let waiter = DispatchSemaphore(value: 0)
+            manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFit,
+                                  options: requestOptions) { image, _ in
+                box.set(image?.cgImage)
+                waiter.signal()
+            }
+            _ = waiter.wait(timeout: .now() + 5)
+            guard let cgImage = box.take() else { return }
+
+            let (level0Margin, _, _) = MarginDetector.detect(in: cgImage, realWidth: asset.pixelWidth,
+                                                               realHeight: asset.pixelHeight, level: 0)
+            guard level0Margin != nil else { return }
+            counts[0] += 1
+            for level in 1...10 {
+                let (margin, _, _) = MarginDetector.detect(in: cgImage, realWidth: asset.pixelWidth,
+                                                            realHeight: asset.pixelHeight, level: level)
+                if margin != nil { counts[level] += 1 }
+            }
+        }
+
+        let lines = (0...10).map { "レベル\($0): \(counts[$0])件" }
+        let summary = "余白検出件数(全レベル、対象\(assets.count)枚):\n" + lines.joined(separator: "\n")
+        completion(summary)
     }
 
     private nonisolated static func isFresh(_ entry: MarginCropCacheEntry, for asset: PHAsset, level: Int) -> Bool {
