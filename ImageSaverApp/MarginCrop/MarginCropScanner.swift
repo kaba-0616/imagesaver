@@ -153,6 +153,20 @@ final class MarginCropScanner: ObservableObject {
             PhotoScanLog.shared.note("トリミング失敗: \(shortID) この写真は編集できません")
             return .failed("この写真は編集できません")
         }
+        // A real-device run hit PHPhotosErrorDomain code 3303
+        // (PHPhotosErrorMissingResource) from `performChanges` below, on an
+        // asset whose crop otherwise looked perfectly ordinary. That error
+        // is documented (if thinly) as Photos being unable to find a
+        // resource it expected -- Live Photos carry a paired video resource
+        // alongside the still image, which a plain JPEG
+        // `PHContentEditingOutput` does not account for. Rejecting Live
+        // Photos here up front turns an opaque Photos-internal failure into
+        // a clear, specific message, rather than waiting for the same
+        // opaque error to resurface.
+        guard !asset.mediaSubtypes.contains(.photoLive) else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) ライブフォトのため未対応")
+            return .failed("ライブフォトは現在この方法でトリミングできません")
+        }
 
         let inputOptions = PHContentEditingInputRequestOptions()
         inputOptions.isNetworkAccessAllowed = true
@@ -222,7 +236,14 @@ final class MarginCropScanner: ObservableObject {
                 PhotoScanLog.shared.note("トリミングキャンセル: \(shortID)")
                 return .cancelled
             }
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) performChanges失敗: \(error.localizedDescription)")
+            // The plain description alone was unhelpful for code 3303
+            // ("couldn't be completed") -- the domain/code pinned down what
+            // it actually was (PHPhotosErrorMissingResource) well before
+            // the description did, so both are logged for next time.
+            let nsError = error as NSError
+            PhotoScanLog.shared.note(
+                "トリミング失敗: \(shortID) performChanges失敗: "
+                + "\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription)")
             return .failed(error.localizedDescription)
         }
     }
