@@ -21,6 +21,26 @@ struct MarginResult: Equatable, Codable {
                width: max(1, width - left - right),
                height: max(1, height - top - bottom))
     }
+
+    /// Whether this and `other` amount to "the same suggestion" for a photo
+    /// of the given real size -- used to decide whether a margin found on a
+    /// re-scan is the one the user already said "don't trim this" to, or a
+    /// genuinely different one worth surfacing again. Exact `==` would treat
+    /// every few-pixel nudge from a detector tweak or a different
+    /// sensitivity level as "new", re-asking about the same spot on the
+    /// photo over and over; a tolerance tied to each edge's own dimension
+    /// (at least 4px, or ~2% of that edge's length) absorbs that noise
+    /// without hiding a margin that has actually moved to a different part
+    /// of the photo.
+    func isEssentiallySame(as other: MarginResult, width: Int, height: Int) -> Bool {
+        func close(_ a: Int, _ b: Int, dimension: Int) -> Bool {
+            abs(a - b) <= max(4, dimension / 50)
+        }
+        return close(top, other.top, dimension: height)
+            && close(bottom, other.bottom, dimension: height)
+            && close(left, other.left, dimension: width)
+            && close(right, other.right, dimension: width)
+    }
 }
 
 /// Finds a uniform-color margin on each of a photo's four edges

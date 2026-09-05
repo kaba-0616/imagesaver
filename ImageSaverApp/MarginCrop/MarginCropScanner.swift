@@ -73,7 +73,7 @@ final class MarginCropScanner: ObservableObject {
         let token = scanToken
         phase = .counting
         let currentLevel = level
-        let skipSet = skipped.identifiers
+        let skippedMargins = skipped.entries
 
         let counted: @Sendable (Int) -> Void = { [weak self] total in
             Task { @MainActor in
@@ -96,15 +96,17 @@ final class MarginCropScanner: ObservableObject {
         }
 
         Self.queue.async {
-            Self.performScan(level: currentLevel, skipped: skipSet,
+            Self.performScan(level: currentLevel, skippedMargins: skippedMargins,
                               counted: counted, progress: progress, finished: finished)
         }
     }
 
     /// "これはトリミングしない": remembered so the next scan does not offer
-    /// this photo again.
+    /// *this exact suggestion* again -- see `MarginCropSkipped`'s own
+    /// comment on why the margin, not just the identifier, is what gets
+    /// recorded.
     func skip(_ candidate: MarginCropCandidate) async -> ApplyOutcome {
-        switch await skipped.add(candidate.localIdentifier) {
+        switch await skipped.add(candidate.localIdentifier, margin: candidate.margin) {
         case .saved:
             candidates.removeAll { $0.id == candidate.id }
             skippedCount = skipped.count
@@ -360,7 +362,7 @@ final class MarginCropScanner: ObservableObject {
 
     private nonisolated static func performScan(
         level: Int,
-        skipped: Set<String>,
+        skippedMargins: [String: MarginResult],
         counted: @escaping @Sendable (Int) -> Void,
         progress: @escaping @Sendable (Int, Int, TimeInterval?) -> Void,
         finished: @escaping @Sendable ([MarginCropCandidate]) -> Void
@@ -382,9 +384,15 @@ final class MarginCropScanner: ObservableObject {
         // so averaging them together would make an early estimate wrong by a
         // mile. This first pass only asks "is it already cached", nothing
         // decoded yet.
+        // Previously-skipped photos are no longer excluded from this count
+        // (or from being computed/re-detected below): "don't trim this" was
+        // a decision about the specific margin shown at the time, not a
+        // blanket exemption from ever being looked at again, so a skipped
+        // photo still needs its margin computed (or read from cache) each
+        // scan to know whether that decision even still applies -- see
+        // where `skippedMargins` is consulted further down.
         var toCompute = 0
         assets.enumerateObjects { asset, _, _ in
-            guard !skipped.contains(asset.localIdentifier) else { return }
             if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset, level: level) { return }
             toCompute += 1
         }
@@ -459,10 +467,10 @@ final class MarginCropScanner: ObservableObject {
                     progress(index + 1, total, remaining)
                 }
             }
-            guard !skipped.contains(asset.localIdentifier) else { return }
-
             if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset, level: level) {
-                if let margin = cached.margin {
+                if let margin = cached.margin,
+                   !isSkipped(margin, for: asset.localIdentifier, width: cached.width, height: cached.height,
+                              skippedMargins: skippedMargins) {
                     found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
                                                       width: cached.width, height: cached.height,
                                                       creationDate: asset.creationDate,
@@ -493,7 +501,9 @@ final class MarginCropScanner: ObservableObject {
                                                                  height: asset.pixelHeight,
                                                                  level: level,
                                                                  margin: margin)
-            if let margin {
+            if let margin,
+               !isSkipped(margin, for: asset.localIdentifier, width: asset.pixelWidth, height: asset.pixelHeight,
+                          skippedMargins: skippedMargins) {
                 found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
                                                   width: asset.pixelWidth, height: asset.pixelHeight,
                                                   creationDate: asset.creationDate,
@@ -556,6 +566,16 @@ final class MarginCropScanner: ObservableObject {
         entry.modificationDate == asset.modificationDate
             && entry.width == asset.pixelWidth && entry.height == asset.pixelHeight
             && entry.level == level
+    }
+
+    /// Whether `margin` matches the suggestion this photo was already
+    /// dismissed for -- see `MarginCropSkipped`'s comment. `false` (i.e. "not
+    /// skipped, offer it") whenever there is no recorded skip for this
+    /// identifier at all.
+    private nonisolated static func isSkipped(_ margin: MarginResult, for identifier: String, width: Int, height: Int,
+                                               skippedMargins: [String: MarginResult]) -> Bool {
+        guard let previous = skippedMargins[identifier] else { return false }
+        return margin.isEssentiallySame(as: previous, width: width, height: height)
     }
 }
 
