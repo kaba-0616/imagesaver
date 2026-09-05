@@ -168,16 +168,42 @@ final class MarginCropScanner: ObservableObject {
             return .failed("ライブフォトは現在この方法でトリミングできません")
         }
 
+        // A retry-after-1-second fix for code 3303 (below) did not clear it
+        // for one real-device screenshot -- three consecutive attempts all
+        // failed identically, so whatever is wrong is deterministic for that
+        // asset, not a timing fluke. Logging the resources Photos actually
+        // has for this asset, plus the `info` dictionary from the editing
+        // input request, gives something concrete to diagnose from next time
+        // instead of guessing at another blind hypothesis.
+        let resources = PHAssetResource.assetResources(for: asset)
+        let resourceSummary = resources
+            .map { "\($0.type.rawValue):\($0.uniformTypeIdentifier)" }
+            .joined(separator: ",")
+        PhotoScanLog.shared.note(
+            "トリミング診断: \(shortID) mediaType=\(asset.mediaType.rawValue) "
+            + "mediaSubtypes=\(asset.mediaSubtypes.rawValue) sourceType=\(asset.sourceType.rawValue) "
+            + "resources=[\(resourceSummary)]")
+
         let inputOptions = PHContentEditingInputRequestOptions()
         inputOptions.isNetworkAccessAllowed = true
+        var inputInfo: [AnyHashable: Any] = [:]
         let input: PHContentEditingInput? = await withCheckedContinuation { continuation in
-            asset.requestContentEditingInput(with: inputOptions) { input, _ in
+            asset.requestContentEditingInput(with: inputOptions) { input, info in
+                inputInfo = info
                 continuation.resume(returning: input)
             }
         }
         guard let input, let imageURL = input.fullSizeImageURL,
               let source = CIImage(contentsOf: imageURL) else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 元画像の読み込みに失敗")
+            let isInCloud = inputInfo[PHContentEditingInputResultIsInCloudKey] as? Bool ?? false
+            let cancelled = inputInfo[PHContentEditingInputCancelledKey] as? Bool ?? false
+            let inputError = (inputInfo[PHContentEditingInputErrorKey] as? Error)
+                .map { "\(($0 as NSError).domain) code=\(($0 as NSError).code) \($0.localizedDescription)" }
+                ?? "なし"
+            PhotoScanLog.shared.note(
+                "トリミング失敗: \(shortID) 元画像の読み込みに失敗 "
+                + "(fullSizeImageURLあり=\(input?.fullSizeImageURL != nil) isInCloud=\(isInCloud) "
+                + "cancelled=\(cancelled) error=\(inputError))")
             return .failed("元画像の読み込みに失敗しました")
         }
 
