@@ -24,6 +24,8 @@ struct MarginDiagnosticView: View {
                     Text("選択中: \(pickedSize)")
                         .foregroundColor(.secondary)
                 }
+                Button("全レベルをコピー") { copyAllLevelsToClipboard() }
+                    .disabled(lastImage == nil)
             }
             Section {
                 Stepper("判定レベル: \(Int(level))", value: $level, in: 0...10, step: 1)
@@ -76,6 +78,28 @@ struct MarginDiagnosticView: View {
                 + "輝度=\(String(format: "%.1f", d.luminance)) 最浅深さ=\(d.shallowest)px "
                 + "列一致率=\(String(format: "%.2f", d.inlierFraction))(必要0.70) "
                 + (d.rejectedAt.map { "棄却: \($0)" } ?? "採用: \(d.depth)px"))
+        }
+        UIPasteboard.general.string = lines.joined(separator: "\n")
+    }
+
+    // "数値だけ見ても実際どのレベルまで検出範囲になるか分からない" という
+    // フィードバックへの対応 -- スライダーで1レベルずつ動かして都度コピーする
+    // 代わりに、レベル0〜10のすべてで採用/棄却と深さを一括計算し、1回のコピーで
+    // 「このレベルからこの深さで切れ始める」という境目がそのまま読み取れるように
+    // する。表示中の単一レベルの行(`rows`)やスライダー位置には触れない。
+    private func copyAllLevelsToClipboard() {
+        guard let lastImage, let pickedSize else { return }
+        var lines = ["余白診断(全レベル): \(pickedSize)"]
+        for lv in 0...10 {
+            guard let levelRows = MarginDetector.diagnose(in: lastImage, level: lv) else {
+                lines.append("レベル\(lv): 解析失敗")
+                continue
+            }
+            let parts = levelRows.map { row -> String in
+                let d = row.diagnostics
+                return "\(row.edge)=" + (d.rejectedAt.map { "棄却(\($0))" } ?? "\(d.depth)px")
+            }.joined(separator: " ")
+            lines.append("レベル\(lv): \(parts)")
         }
         UIPasteboard.general.string = lines.joined(separator: "\n")
     }
