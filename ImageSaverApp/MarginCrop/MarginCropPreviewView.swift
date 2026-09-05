@@ -280,7 +280,16 @@ private struct MarginCropPhotoPage: View {
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
-        let target = CGSize(width: 1600, height: 1600)
+        // Lowered from 1600x1600 after a real-device crash, reproducing 100%
+        // of the time, on the one action in this screen that forces a full
+        // redraw of everything on screen at once (the background-color
+        // toggle) -- consistent with this app's established memory-pressure
+        // pattern (the source app this replaces, and this app's own share
+        // extension, both crashed this same way under a large image
+        // working set) rather than a logic bug in the toggle itself, which
+        // does nothing beyond flip a Color. 1024 is still comfortably large
+        // enough to judge a margin's edge on screen.
+        let target = CGSize(width: 1024, height: 1024)
         PHImageManager.default().requestImage(for: asset, targetSize: target, contentMode: .aspectFit,
                                               options: options) { result, _ in
             // Photos does not guarantee this callback lands on the main
