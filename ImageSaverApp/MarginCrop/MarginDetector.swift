@@ -191,17 +191,25 @@ enum MarginDetector {
     /// the same reasoning: a real photo edge (sky, wall, a silhouette) has
     /// no reason to be dominated by one exact color at all, while a
     /// synthetic bar -- plain or with icons overlaid -- is.
+    /// `offset` (in steps from the edge, 0 = the outermost line) lets this
+    /// read a band that starts partway in rather than always at the
+    /// physical edge -- used to characterize a second, differently-colored
+    /// band once the first one has been walked through (see the chaining
+    /// loop in `edgeDiagnostics`), so a screenshot's own stacked chrome
+    /// (e.g. a black system status bar directly above a differently-colored
+    /// app header) can be recognized band by band instead of only ever
+    /// recognizing the first.
     private static func robustBaseline(rows: [[UInt8]], width: Int, height: Int,
-                                        edge: Edge, tolerance: Int) -> Baseline {
+                                        edge: Edge, tolerance: Int, offset: Int = 0) -> Baseline {
         let isHorizontal = edge == .top || edge == .bottom
         let length = isHorizontal ? width : height
         let lineCount = isHorizontal ? height : width
-        guard length > 0, lineCount > 0 else { return Baseline(r: 0, g: 0, b: 0, saturation: 0, matchFraction: 0) }
+        guard length > 0, lineCount > 0, offset < lineCount else { return Baseline(r: 0, g: 0, b: 0, saturation: 0, matchFraction: 0) }
 
-        let band = min(5, lineCount)
+        let band = min(5, lineCount - offset)
         let indices: [Int] = (edge == .bottom || edge == .right)
-            ? Array((lineCount - band)..<lineCount)
-            : Array(0..<band)
+            ? Array((lineCount - offset - band)..<(lineCount - offset))
+            : Array(offset..<(offset + band))
 
         var rs: [Double] = [], gs: [Double] = [], bs: [Double] = []
         let capacity = length * band
@@ -336,24 +344,67 @@ enum MarginDetector {
         // back to the pre-gap position, same as before) once genuine
         // content actually starts.
         let maxGap = max(2, lineCount / 30)
-        var depths: [Int] = []
-        depths.reserveCapacity(sampleCount)
-        for sample in 0..<sampleCount {
-            var depth = 0
-            var gap = 0
-            for step in 0..<lineCount {
-                let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
-                let pixel = sampledColor(index: index, sample: sample)
-                let diff = abs(pixel.r - baseline.r) + abs(pixel.g - baseline.g) + abs(pixel.b - baseline.b)
-                if diff <= Double(tolerance) {
-                    gap = 0
-                    depth = step + 1
-                } else {
-                    gap += 1
-                    guard gap <= maxGap else { break }
+
+        /// How far, per column/row, `bandBaseline`'s color extends starting
+        /// at `cursor` (steps from the edge) -- gap-tolerant the same way a
+        /// single-band scan is. Returns depth *within this band* (0-based
+        /// from `cursor`), not cumulative from the edge.
+        func scanBand(baseline bandBaseline: Baseline, from cursor: Int) -> [Int] {
+            var bandDepths = [Int](repeating: 0, count: sampleCount)
+            for sample in 0..<sampleCount {
+                var depth = 0
+                var gap = 0
+                for step in cursor..<lineCount {
+                    let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
+                    let pixel = sampledColor(index: index, sample: sample)
+                    let diff = abs(pixel.r - bandBaseline.r) + abs(pixel.g - bandBaseline.g) + abs(pixel.b - bandBaseline.b)
+                    if diff <= Double(tolerance) {
+                        gap = 0
+                        depth = step - cursor + 1
+                    } else {
+                        gap += 1
+                        guard gap <= maxGap else { break }
+                    }
                 }
+                bandDepths[sample] = depth
             }
-            depths.append(depth)
+            return bandDepths
+        }
+
+        // A screenshot's own chrome is often more than one flat-colored
+        // strip stacked together -- a black system status bar sitting
+        // directly above a differently-colored app header, say. A single
+        // fixed baseline color only ever recognizes the first strip;
+        // reaching the seam where the color changes looks identical to
+        // reaching the real photo, so detection always stopped there even
+        // though what follows is still uniform chrome, not content. Once
+        // one band's own scan agrees it has run out of room (the same
+        // outlier-tolerant percentile used for the final result, applied
+        // per band), check whether what comes right after is itself a new
+        // uniform, near-black/near-white band -- if so, treat it as more of
+        // the same margin and keep going. Capped at a handful of bands so a
+        // genuinely textured photo can never be walked through one
+        // flat-looking sliver at a time.
+        var depths = [Int](repeating: 0, count: sampleCount)
+        var currentBaseline = baseline
+        var cursor = 0
+        let maxBands = 4
+        for _ in 0..<maxBands {
+            let bandDepths = scanBand(baseline: currentBaseline, from: cursor)
+            for i in 0..<sampleCount { depths[i] += bandDepths[i] }
+
+            let sortedBand = bandDepths.sorted()
+            let bandAdvance = sortedBand[min(sortedBand.count - 1, sortedBand.count / 50)]
+            guard bandAdvance > 0 else { break }
+            cursor += bandAdvance
+            guard cursor < lineCount else { break }
+
+            let nextBaseline = robustBaseline(rows: rows, width: width, height: height, edge: edge,
+                                               tolerance: tolerance, offset: cursor)
+            let nextLuminance = (nextBaseline.r + nextBaseline.g + nextBaseline.b) / 3
+            guard nextBaseline.matchFraction >= minMatchFraction, nextBaseline.saturation <= saturationLimit,
+                  nextLuminance <= nearBlackMax || nextLuminance >= nearWhiteMin else { break }
+            currentBaseline = nextBaseline
         }
 
         // The literal minimum across every column/row was trusted as "the
