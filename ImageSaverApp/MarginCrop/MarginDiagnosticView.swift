@@ -64,19 +64,32 @@ struct MarginDiagnosticView: View {
         errorText = rows == nil ? "画像の解析に失敗しました" : nil
     }
 
+    // Plain HStack rows, not `LabeledContent` -- that API needs iOS 16, and
+    // this project's deployment target is still 15.0 (this screen is not an
+    // exception to that).
     @ViewBuilder
     private func diagnosticRow(_ d: MarginDetector.EdgeDiagnostics) -> some View {
-        LabeledContent("一致率", value: String(format: "%.2f (必要 %.2f)", d.matchFraction, MarginLevel.minMatchFraction(for: Int(level))))
-        LabeledContent("彩度", value: String(format: "%.1f (上限 %d)", d.saturation, MarginLevel.saturationLimit))
-        LabeledContent("輝度", value: String(format: "%.1f", d.luminance))
-        LabeledContent("最浅の深さ", value: "\(d.shallowest)px")
-        LabeledContent("列の一致率", value: String(format: "%.2f (必要 0.70)", d.inlierFraction))
-        LabeledContent("結果") {
+        labeledRow("一致率", String(format: "%.2f (必要 %.2f)", d.matchFraction, MarginLevel.minMatchFraction(for: Int(level))))
+        labeledRow("彩度", String(format: "%.1f (上限 %d)", d.saturation, MarginLevel.saturationLimit))
+        labeledRow("輝度", String(format: "%.1f", d.luminance))
+        labeledRow("最浅の深さ", "\(d.shallowest)px")
+        labeledRow("列の一致率", String(format: "%.2f (必要 0.70)", d.inlierFraction))
+        HStack {
+            Text("結果")
+            Spacer()
             if let rejectedAt = d.rejectedAt {
                 Text("棄却: \(rejectedAt)").foregroundColor(.red)
             } else {
                 Text("採用: \(d.depth)px").foregroundColor(.green)
             }
+        }
+    }
+
+    private func labeledRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value).foregroundColor(.secondary)
         }
     }
 }
