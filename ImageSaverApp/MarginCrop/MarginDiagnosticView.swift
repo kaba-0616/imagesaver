@@ -1,6 +1,7 @@
 import Photos
 import PhotosUI
 import SwiftUI
+import UIKit
 
 /// A debug screen: pick one photo from the library and see the raw numbers
 /// `MarginDetector` computed for each of its four edges, at every detection
@@ -43,6 +44,12 @@ struct MarginDiagnosticView: View {
         }
         .navigationTitle("余白診断")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("コピー") { copyToClipboard() }
+                    .disabled(rows == nil)
+            }
+        }
         .sheet(isPresented: $showingPicker) {
             MarginDiagnosticPicker { image, size in
                 pickedSize = size
@@ -53,6 +60,25 @@ struct MarginDiagnosticView: View {
     }
 
     @State private var lastImage: CGImage?
+
+    // The on-screen rows are fine for a quick look, but every real
+    // diagnosis so far has meant retyping numbers off a photo of the screen
+    // into a chat -- copying the same text this view renders sidesteps that
+    // entirely.
+    private func copyToClipboard() {
+        guard let rows, let pickedSize else { return }
+        var lines = ["余白診断: \(pickedSize) レベル\(Int(level))"]
+        for row in rows {
+            let d = row.diagnostics
+            lines.append("[\(row.edge)] 一致率=\(String(format: "%.2f", d.matchFraction))"
+                + "(必要\(String(format: "%.2f", MarginLevel.minMatchFraction(for: Int(level))))) "
+                + "彩度=\(String(format: "%.1f", d.saturation))(上限\(MarginLevel.saturationLimit)) "
+                + "輝度=\(String(format: "%.1f", d.luminance)) 最浅深さ=\(d.shallowest)px "
+                + "列一致率=\(String(format: "%.2f", d.inlierFraction))(必要0.70) "
+                + (d.rejectedAt.map { "棄却: \($0)" } ?? "採用: \(d.depth)px"))
+        }
+        UIPasteboard.general.string = lines.joined(separator: "\n")
+    }
 
     private func rerun() {
         guard let lastImage else { return }
