@@ -57,16 +57,16 @@ enum MarginDetector {
         guard let rows = pixelRows(of: image, width: sampleWidth, height: sampleHeight) else { return (nil, nil, false) }
 
         let tolerance = MarginLevel.colorTolerance(for: level)
-        let varianceLimit = MarginLevel.varianceLimit(for: level)
+        let minMatchFraction = MarginLevel.minMatchFraction(for: level)
 
         let topDepth = marginDepth(rows: rows, width: sampleWidth, height: sampleHeight,
-                                    from: .top, tolerance: tolerance, varianceLimit: varianceLimit)
+                                    from: .top, tolerance: tolerance, minMatchFraction: minMatchFraction)
         let bottomDepth = marginDepth(rows: rows, width: sampleWidth, height: sampleHeight,
-                                       from: .bottom, tolerance: tolerance, varianceLimit: varianceLimit)
+                                       from: .bottom, tolerance: tolerance, minMatchFraction: minMatchFraction)
         let leftDepth = marginDepth(rows: rows, width: sampleWidth, height: sampleHeight,
-                                     from: .left, tolerance: tolerance, varianceLimit: varianceLimit)
+                                     from: .left, tolerance: tolerance, minMatchFraction: minMatchFraction)
         let rightDepth = marginDepth(rows: rows, width: sampleWidth, height: sampleHeight,
-                                      from: .right, tolerance: tolerance, varianceLimit: varianceLimit)
+                                      from: .right, tolerance: tolerance, minMatchFraction: minMatchFraction)
 
         // Never eat more than ~60% out of one side -- a genuinely dark or
         // plain photo (a night sky, a studio backdrop) should not be able to
@@ -151,36 +151,60 @@ enum MarginDetector {
 
     private enum Edge { case top, bottom, left, right }
 
-    /// One scanline's average color, its own internal color variance (high
-    /// variance means "this line has real content in it", not a flat margin,
-    /// regardless of how close its average color is to the edge's), and its
-    /// saturation (how far the three channels spread apart -- a colored
-    /// studio backdrop can be just as flat and uniform as a real letterbox
-    /// bar, but it is not one; only near-white/near-black/gray counts).
-    private struct Line { let r: Double; let g: Double; let b: Double; let variance: Double; let saturation: Double }
+    /// A band's robust (median, not mean) color, its saturation (how far the
+    /// three channels spread apart -- a colored studio backdrop can be just
+    /// as flat and uniform as a real letterbox bar, but it is not one; only
+    /// near-white/near-black/gray counts), and what fraction of the band's
+    /// own pixels actually sit within `tolerance` of that median color.
+    private struct Baseline { let r: Double; let g: Double; let b: Double; let saturation: Double; let matchFraction: Double }
 
-    private static func line(_ index: Int, rows: [[UInt8]], width: Int, height: Int, edge: Edge) -> Line {
+    /// Pools a small band of the outermost lines (rather than reading just
+    /// one) and takes the *median* per channel, not the mean -- a mean is
+    /// dragged by every pixel equally, so a synthetic bar with its own
+    /// overlaid content (a video-style status readout: white time/battery/
+    /// wifi glyphs on an otherwise flat black strip) pulls a single line's
+    /// average away from the bar's true color in proportion to how much of
+    /// the line the glyphs cover. The median only cares what most pixels in
+    /// the band are, so as long as icons/text stay a minority of the band's
+    /// area, they cannot move it. `matchFraction` (how much of the band
+    /// actually matches that median) replaces a straight variance check on
+    /// the same reasoning: a real photo edge (sky, wall, a silhouette) has
+    /// no reason to be dominated by one exact color at all, while a
+    /// synthetic bar -- plain or with icons overlaid -- is.
+    private static func robustBaseline(rows: [[UInt8]], width: Int, height: Int,
+                                        edge: Edge, tolerance: Int) -> Baseline {
         let isHorizontal = edge == .top || edge == .bottom
         let length = isHorizontal ? width : height
-        guard length > 0 else { return Line(r: 0, g: 0, b: 0, variance: 0, saturation: 0) }
+        let lineCount = isHorizontal ? height : width
+        guard length > 0, lineCount > 0 else { return Baseline(r: 0, g: 0, b: 0, saturation: 0, matchFraction: 0) }
 
-        var sumR = 0, sumG = 0, sumB = 0
-        var samples: [Double] = []
-        samples.reserveCapacity(length)
-        for i in 0..<length {
-            let (x, y): (Int, Int) = isHorizontal ? (i, index) : (index, i)
-            let row = rows[y]
-            let offset = x * 4
-            let r = Int(row[offset]), g = Int(row[offset + 1]), b = Int(row[offset + 2])
-            sumR += r; sumG += g; sumB += b
-            samples.append(Double(r + g + b) / 3)
+        let band = min(5, lineCount)
+        let indices: [Int] = (edge == .bottom || edge == .right)
+            ? Array((lineCount - band)..<lineCount)
+            : Array(0..<band)
+
+        var rs: [Double] = [], gs: [Double] = [], bs: [Double] = []
+        let capacity = length * band
+        rs.reserveCapacity(capacity); gs.reserveCapacity(capacity); bs.reserveCapacity(capacity)
+        for index in indices {
+            for i in 0..<length {
+                let (x, y): (Int, Int) = isHorizontal ? (i, index) : (index, i)
+                let row = rows[y]
+                let offset = x * 4
+                rs.append(Double(row[offset])); gs.append(Double(row[offset + 1])); bs.append(Double(row[offset + 2]))
+            }
         }
-        let count = Double(length)
-        let meanR = Double(sumR) / count, meanG = Double(sumG) / count, meanB = Double(sumB) / count
-        let mean = (meanR + meanG + meanB) / 3
-        let variance = samples.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / count
-        let saturation = max(meanR, meanG, meanB) - min(meanR, meanG, meanB)
-        return Line(r: meanR, g: meanG, b: meanB, variance: variance, saturation: saturation)
+        func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+        let medianR = median(rs), medianG = median(gs), medianB = median(bs)
+        let saturation = max(medianR, medianG, medianB) - min(medianR, medianG, medianB)
+
+        var matches = 0
+        for i in rs.indices {
+            let diff = abs(rs[i] - medianR) + abs(gs[i] - medianG) + abs(bs[i] - medianB)
+            if diff <= Double(tolerance) { matches += 1 }
+        }
+        let matchFraction = rs.isEmpty ? 0 : Double(matches) / Double(rs.count)
+        return Baseline(r: medianR, g: medianG, b: medianB, saturation: saturation, matchFraction: matchFraction)
     }
 
     /// A synthetic bar added to the whole image crosses every column (for a
@@ -196,16 +220,15 @@ enum MarginDetector {
     /// however uniform, essentially never manages to do across the whole
     /// width or height at once.
     private static func marginDepth(rows: [[UInt8]], width: Int, height: Int,
-                                     from edge: Edge, tolerance: Int, varianceLimit: Int) -> Int {
+                                     from edge: Edge, tolerance: Int, minMatchFraction: Double) -> Int {
         let isHorizontal = edge == .top || edge == .bottom
         let lineCount = isHorizontal ? height : width
         let sampleCount = isHorizontal ? width : height
         guard lineCount > 0, sampleCount > 0 else { return 0 }
 
         let saturationLimit = Double(MarginLevel.saturationLimit)
-        let outermost = edge == .bottom || edge == .right ? lineCount - 1 : 0
-        let baseline = line(outermost, rows: rows, width: width, height: height, edge: edge)
-        guard baseline.variance <= Double(varianceLimit), baseline.saturation <= saturationLimit else { return 0 }
+        let baseline = robustBaseline(rows: rows, width: width, height: height, edge: edge, tolerance: tolerance)
+        guard baseline.matchFraction >= minMatchFraction, baseline.saturation <= saturationLimit else { return 0 }
 
         // A synthetic white/black bar sits at the extreme ends of luminance;
         // a photographed "black" background almost never does (ambient

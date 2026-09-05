@@ -59,15 +59,21 @@ enum MarginLevel {
         18 - clamp(level)
     }
 
-    /// Highest allowed per-line color variance before a line is judged too
-    /// detailed to be part of a flat margin (a gradient sky, a textured
-    /// wall, say). Tightened alongside `colorTolerance`, for the same
-    /// "demand actual flatness" reasoning -- from 400-level*35 to
-    /// 60-level*5, since a synthetic bar's own variance (JPEG noise on an
-    /// otherwise perfectly flat fill) should be far lower than what the
-    /// original, much looser limit allowed through.
-    static func varianceLimit(for level: Int) -> Int {
-        60 - clamp(level) * 5
+    /// How much of a margin's outer band of pixels must actually match its
+    /// own (median) color before the edge counts as flat at all.
+    ///
+    /// Replaced a per-line variance check (any single line's own internal
+    /// spread) after a real-device example showed its blind spot: a
+    /// synthetic bar can carry overlaid content of its own (a video-style
+    /// status readout -- white time/battery/wifi glyphs on a black strip),
+    /// and that single line's variance spikes just from the icon pixels
+    /// mixed into an otherwise flat line, rejecting the whole edge outright.
+    /// A match-fraction against the band's *median* color tolerates a
+    /// minority of non-matching pixels (icons, text) the same way the
+    /// column-depth consistency check below already tolerates a minority of
+    /// corner-interference columns -- only a majority needs to agree.
+    static func minMatchFraction(for level: Int) -> Double {
+        0.55 + Double(clamp(level)) * 0.03
     }
 
     /// How far a line's three color channels may spread apart (0 = pure
