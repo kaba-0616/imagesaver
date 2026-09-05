@@ -10,7 +10,7 @@ import SwiftUI
 struct MarginDiagnosticView: View {
 
     @State private var showingPicker = false
-    @State private var rows: [(edge: String, diagnostics: MarginDetector.EdgeDiagnostics)]?
+    @State private var rows: [MarginDetector.EdgeDiagnosticRow]?
     @State private var pickedSize: String?
     @State private var errorText: String?
     @State private var level = Double(MarginLevel.stored())
@@ -34,7 +34,7 @@ struct MarginDiagnosticView: View {
                 }
             }
             if let rows {
-                ForEach(rows, id: \.edge) { row in
+                ForEach(rows) { row in
                     Section(row.edge) {
                         diagnosticRow(row.diagnostics)
                     }

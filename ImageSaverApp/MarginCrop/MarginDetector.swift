@@ -354,12 +354,21 @@ enum MarginDetector {
                       luminance: luminance, shallowest: shallowest, inlierFraction: inlierFraction, rejectedAt: nil)
     }
 
+    /// One edge's diagnostics plus a display label -- a plain `Identifiable`
+    /// struct rather than a tuple so `MarginDiagnosticView`'s `ForEach` can
+    /// key off it directly.
+    struct EdgeDiagnosticRow: Identifiable {
+        let edge: String
+        let diagnostics: EdgeDiagnostics
+        var id: String { edge }
+    }
+
     /// Runs the same per-edge measurements `detect` uses, but returns every
     /// intermediate number instead of collapsing them into a pass/fail --
     /// for a debug screen that lets a real failing photo be measured
     /// directly, rather than guessing which threshold is wrong from a
     /// screenshot alone.
-    static func diagnose(in image: CGImage, level: Int) -> [(edge: String, diagnostics: EdgeDiagnostics)]? {
+    static func diagnose(in image: CGImage, level: Int) -> [EdgeDiagnosticRow]? {
         let sampleWidth = image.width
         let sampleHeight = image.height
         guard sampleWidth > 8, sampleHeight > 8, let rows = pixelRows(of: image, width: sampleWidth, height: sampleHeight) else {
@@ -367,7 +376,8 @@ enum MarginDetector {
         }
         let tolerance = MarginLevel.colorTolerance(for: level)
         let minMatchFraction = MarginLevel.minMatchFraction(for: level)
-        return [.top, .bottom, .left, .right].map { edge in
+        let edges: [Edge] = [.top, .bottom, .left, .right]
+        return edges.map { edge in
             let label: String
             switch edge {
             case .top: label = "上"
@@ -377,7 +387,7 @@ enum MarginDetector {
             }
             let diagnostics = edgeDiagnostics(rows: rows, width: sampleWidth, height: sampleHeight, edge: edge,
                                                tolerance: tolerance, minMatchFraction: minMatchFraction)
-            return (label, diagnostics)
+            return EdgeDiagnosticRow(edge: label, diagnostics: diagnostics)
         }
     }
 
