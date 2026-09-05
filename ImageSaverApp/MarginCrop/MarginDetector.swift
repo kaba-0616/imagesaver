@@ -297,16 +297,41 @@ enum MarginDetector {
             return (Double(sumR) / Double(count), Double(sumG) / Double(count), Double(sumB) / Double(count))
         }
 
+        // A decoration embedded *inside* an otherwise-uniform bar (an iPhone
+        // home indicator pill, a status-bar icon) sits between the true
+        // content boundary and the physical edge, not at the boundary
+        // itself. Requiring an unbroken run of matching pixels all the way
+        // from the edge means one such decoration -- however narrow --
+        // stops that column's run dead at the decoration, long before the
+        // real boundary, because nothing past it ever gets to count even
+        // though it goes right back to matching the bar's own color
+        // afterward. Tolerating a short gap of mismatching pixels (and
+        // resuming the count if the bar's color picks back up within it)
+        // fixes this at its source, for every column, rather than only
+        // patching it up statistically after the fact the way the
+        // percentile cut below does for the *cross-column* version of the
+        // same problem. `maxGap` is sized off the sample resolution, not
+        // measured against a real decoration's width -- generous enough to
+        // cross a typical icon, small enough that it still gives up (falls
+        // back to the pre-gap position, same as before) once genuine
+        // content actually starts.
+        let maxGap = max(2, lineCount / 30)
         var depths: [Int] = []
         depths.reserveCapacity(sampleCount)
         for sample in 0..<sampleCount {
             var depth = 0
+            var gap = 0
             for step in 0..<lineCount {
                 let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
                 let pixel = sampledColor(index: index, sample: sample)
                 let diff = abs(pixel.r - baseline.r) + abs(pixel.g - baseline.g) + abs(pixel.b - baseline.b)
-                guard diff <= Double(tolerance) else { break }
-                depth = step + 1
+                if diff <= Double(tolerance) {
+                    gap = 0
+                    depth = step + 1
+                } else {
+                    gap += 1
+                    guard gap <= maxGap else { break }
+                }
             }
             depths.append(depth)
         }
