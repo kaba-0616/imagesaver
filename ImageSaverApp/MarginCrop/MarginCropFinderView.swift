@@ -22,6 +22,13 @@ struct MarginCropFinderView: View {
     @StateObject private var scanner = MarginCropScanner()
     @State private var selected: Set<String> = []
     @State private var busyIdentifiers: Set<String> = []
+    // Blocks the whole grid's hit testing (not just the busy card's own
+    // buttons) for the duration of any skip/apply -- single or bulk. Without
+    // this, `LazyVGrid`'s position-based view reuse means a tap resolving
+    // just as another card's mutation removes an item from `scanner.
+    // candidates` can bind to whatever candidate has since slid into that
+    // screen slot, opening a different photo than the one actually tapped.
+    @State private var isMutatingGrid = false
     @State private var showingLevelPicker = false
     @State private var levelDisplay = Double(MarginLevel.stored())
     @State private var message: String?
@@ -212,6 +219,7 @@ struct MarginCropFinderView: View {
             }
             .padding(16)
         }
+        .allowsHitTesting(!isMutatingGrid)
     }
 
     private func card(_ candidate: MarginCropCandidate) -> some View {
@@ -295,21 +303,26 @@ struct MarginCropFinderView: View {
     }
 
     func apply(_ candidate: MarginCropCandidate) async {
+        isMutatingGrid = true
         busyIdentifiers.insert(candidate.id)
         let outcome = await scanner.apply(candidate)
         busyIdentifiers.remove(candidate.id)
         selected.remove(candidate.id)
         message = outcome.describe()
+        isMutatingGrid = false
     }
 
     func skip(_ candidate: MarginCropCandidate) async {
+        isMutatingGrid = true
         busyIdentifiers.insert(candidate.id)
         _ = await scanner.skip(candidate)
         busyIdentifiers.remove(candidate.id)
         selected.remove(candidate.id)
+        isMutatingGrid = false
     }
 
     private func applySelected() async {
+        isMutatingGrid = true
         let targets = scanner.candidates.filter { selected.contains($0.id) }
         var succeeded = 0
         for candidate in targets {
@@ -317,9 +330,11 @@ struct MarginCropFinderView: View {
         }
         selected.removeAll()
         message = "\(succeeded) / \(targets.count)枚をトリミングしました"
+        isMutatingGrid = false
     }
 
     private func skipSelected() async {
+        isMutatingGrid = true
         let targets = scanner.candidates.filter { selected.contains($0.id) }
         var succeeded = 0
         for candidate in targets {
@@ -327,6 +342,7 @@ struct MarginCropFinderView: View {
         }
         selected.removeAll()
         message = "\(succeeded) / \(targets.count)枚を「トリミングしない」にしました"
+        isMutatingGrid = false
     }
 
     // MARK: - Level
