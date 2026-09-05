@@ -40,30 +40,34 @@ enum MarginLevel {
 
     /// Highest allowed sum-of-channel difference (0...765) between an edge
     /// line and the outermost line before the margin is considered broken.
-    /// Briefly loosened to 90-level*7 in build144 on the theory that the
-    /// straight-line consistency check alone was enough of a guard -- a real
-    /// device run at that setting found ~48% of an 184k-photo library
-    /// "detected" (a clearly absurd rate), so this went back to its original
-    /// 60-level*5. What actually needed loosening for "cut closer to the
-    /// real edge" was the depth cap/floor below, not how easily something
-    /// counts as a margin at all -- conflating the two was the mistake.
-    /// Tightened once more, pre-emptively, to 45-level*4: a later run at the
-    /// original value found a large-but-uncounted number of candidates (the
-    /// per-run log cap swallowed the final count before it could be read --
-    /// see `MarginCropScanner`'s detection-log cap), so this moves a step
-    /// stricter without data to measure against yet. Revisit once a real
-    /// total count is available.
+    ///
+    /// Everything up to build149 tried to solve false positives with the
+    /// *shape* of the boundary (a straight line, corner-robust or not) --
+    /// but a real-device run at build149's thresholds still found most of
+    /// its ~5,363 candidates were nothing to crop. The reason: a horizon, a
+    /// wall/floor edge, or a plain sky is *also* a perfectly straight line
+    /// across the whole width, so shape alone cannot separate a real added
+    /// border from ordinary photo content. What genuinely sets a synthetic
+    /// bar apart is that it is a single, exactly uniform color painted in by
+    /// software -- not just "low variance" or "similar-ish", but essentially
+    /// flat at the pixel level once JPEG noise is accounted for -- while a
+    /// real sky/wall/water, however visually uniform, always carries subtle
+    /// continuous variation a synthetic fill never has. This tightens the
+    /// per-pixel tolerance drastically (from 45-level*4 to 18-level) to
+    /// demand that near-flatness, rather than tuning the shape check further.
     static func colorTolerance(for level: Int) -> Int {
-        45 - clamp(level) * 4
+        18 - clamp(level)
     }
 
     /// Highest allowed per-line color variance before a line is judged too
     /// detailed to be part of a flat margin (a gradient sky, a textured
-    /// wall, say) -- guards low tolerance from still matching real content
-    /// that happens to average out near the edge color. Tightened alongside
-    /// `colorTolerance` for the same pre-emptive reason.
+    /// wall, say). Tightened alongside `colorTolerance`, for the same
+    /// "demand actual flatness" reasoning -- from 400-level*35 to
+    /// 60-level*5, since a synthetic bar's own variance (JPEG noise on an
+    /// otherwise perfectly flat fill) should be far lower than what the
+    /// original, much looser limit allowed through.
     static func varianceLimit(for level: Int) -> Int {
-        400 - clamp(level) * 35
+        60 - clamp(level) * 5
     }
 
     /// How far a line's three color channels may spread apart (0 = pure
@@ -74,9 +78,6 @@ enum MarginLevel {
     /// read as one. Not tied to the strictness slider: this feature only
     /// ever claimed to find white/black/gray bars (see the reference photos
     /// this was designed against), so a looser detection level should catch
-    /// noisier near-gray bars, not colored backgrounds. Tightened from 40 to
-    /// 30 alongside `colorTolerance`, for the same pre-emptive reason --
-    /// `MarginDetector`'s Vision pass is only an optional, best-effort
-    /// confirmation now (see `reconcile`), not a gate this can lean on.
+    /// noisier near-gray bars, not colored backgrounds.
     static let saturationLimit = 30
 }

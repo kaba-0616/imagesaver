@@ -224,23 +224,9 @@ enum MarginDetector {
             return (Double(sumR) / Double(count), Double(sumG) / Double(count), Double(sumB) / Double(count))
         }
 
-        // Excludes the corners from the straight-line check: when all four
-        // edges carry a margin, the columns/rows nearest a corner are also
-        // inside the *perpendicular* margin, so the same border color can
-        // continue far deeper there than along the true edge (often for the
-        // image's entire remaining height/width). That drags the corner
-        // samples' depth far away from the middle ones and blows out
-        // `spread` below, rejecting a real four-sided border outright --
-        // exactly the failure a real-device run showed (only two-sided
-        // top/bottom or left/right borders were ever detected, never all
-        // four at once). A two-sided border has no such interference, so
-        // restricting to the central samples changes nothing for it.
-        let cornerFraction = sampleCount / 6
-        let sampleRange = cornerFraction..<max(cornerFraction + 1, sampleCount - cornerFraction)
-
         var depths: [Int] = []
-        depths.reserveCapacity(sampleRange.count)
-        for sample in sampleRange {
+        depths.reserveCapacity(sampleCount)
+        for sample in 0..<sampleCount {
             var depth = 0
             for step in 0..<lineCount {
                 let index = edge == .bottom || edge == .right ? lineCount - 1 - step : step
@@ -254,21 +240,35 @@ enum MarginDetector {
 
         let sorted = depths.sorted()
         guard let shallowest = sorted.first, shallowest > 0 else { return 0 }
-        let meanDepth = Double(depths.reduce(0, +)) / Double(depths.count)
-        let spread = depths.reduce(0.0) { $0 + abs(Double($1) - meanDepth) } / Double(depths.count)
-        // Slack for anti-aliasing/noise right at the seam -- a real straight
-        // bar will not disagree by much from one column to the next; a
-        // silhouette disagrees by a lot, since it is tracing a shape, not a
-        // line. Briefly loosened to 0.2 in build144, reverted to 0.12; now
-        // tightened further to 0.10 pre-emptively (no on-device count to
-        // measure against yet -- see `MarginLevel`'s thresholds for the
-        // same reasoning) alongside the corner exclusion above.
-        let allowedSpread = max(2.0, meanDepth * 0.10)
-        guard spread <= allowedSpread else { return 0 }
+
+        // Consistency is judged against the median, and against how many
+        // columns/rows agree with it, rather than the mean and an average
+        // spread. When all four edges carry a margin, the columns/rows
+        // nearest a corner are also inside the *perpendicular* margin, so
+        // the same border color can continue far deeper there than along
+        // the true edge -- often for the image's entire remaining height or
+        // width. A first attempt tried to dodge this by excluding a fixed
+        // fraction of columns near each end, but that only works if the
+        // perpendicular border is shallower than the excluded fraction --
+        // a deep enough border on all four sides still poisoned the
+        // (still-included) columns just past the cutoff. The median does
+        // not have that problem: it only cares what most columns say, no
+        // matter how far the corner outliers wander, as long as they stay a
+        // minority. A two-sided border has no such outliers at all (every
+        // column agrees), so this changes nothing for it.
+        let median = Double(sorted[sorted.count / 2])
+        // Same shape of slack as before (a small floor, or a fraction of
+        // the depth, for anti-aliasing/noise at the seam) -- just measured
+        // against the median instead of the mean.
+        let inlierTolerance = max(2.0, median * 0.10)
+        let inlierCount = depths.reduce(0) { abs(Double($1) - median) <= inlierTolerance ? $0 + 1 : $0 }
+        guard Double(inlierCount) / Double(depths.count) >= 0.7 else { return 0 }
 
         // The shallowest column/row is the safe cut line: trusting the
-        // average instead could still shave into the one column where the
-        // subject actually starts earliest.
+        // median instead could still shave into the one column where the
+        // subject actually starts earliest. Corner outliers only ever run
+        // deeper than the true edge, never shallower, so they cannot distort
+        // this minimum even though they were left in `depths`.
         return shallowest
     }
 

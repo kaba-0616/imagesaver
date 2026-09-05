@@ -27,11 +27,14 @@ enum MarginCropCache {
     /// shape changes. A stale verdict from an earlier algorithm version looks
     /// exactly like a fresh one to `isFresh` (same photo, same level), so
     /// changing the algorithm without bumping this meant re-scans kept
-    /// serving results computed under the old logic. Bumped to 4: corner
-    /// columns/rows are now excluded from the straight-line consistency
-    /// check (fixes four-sided borders never being detected), and the
-    /// acceptance thresholds were tightened pre-emptively.
-    private static let currentVersion = 4
+    /// serving results computed under the old logic. Bumped to 5: the
+    /// corner-robustness fix moved from a fixed excluded fraction to a
+    /// median/inlier-based consistency check, and the color thresholds were
+    /// tightened substantially to demand near-perfect flatness (see
+    /// `MarginLevel.colorTolerance`) after a real run showed shape-based
+    /// checks alone let through mostly-irrelevant candidates (skies, walls,
+    /// water -- also straight lines, just not synthetic ones).
+    private static let currentVersion = 5
     private static let versionKey = "marginCropCacheVersion"
     private static var fileURL: URL? { PhotoScanStore.url("margincrop.json") }
 
