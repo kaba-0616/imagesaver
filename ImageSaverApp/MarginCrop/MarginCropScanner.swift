@@ -169,21 +169,10 @@ final class MarginCropScanner: ObservableObject {
             return .failed("ライブフォトは現在この方法でトリミングできません")
         }
 
-        // A retry-after-1-second fix for code 3303 (below) did not clear it
-        // for one real-device screenshot -- three consecutive attempts all
-        // failed identically, so whatever is wrong is deterministic for that
-        // asset, not a timing fluke. Logging the resources Photos actually
-        // has for this asset, plus the `info` dictionary from the editing
-        // input request, gives something concrete to diagnose from next time
-        // instead of guessing at another blind hypothesis.
         let resources = PHAssetResource.assetResources(for: asset)
         let resourceSummary = resources
             .map { "\($0.type.rawValue):\($0.uniformTypeIdentifier)" }
             .joined(separator: ",")
-        PhotoScanLog.shared.note(
-            "トリミング診断: \(shortID) mediaType=\(asset.mediaType.rawValue) "
-            + "mediaSubtypes=\(asset.mediaSubtypes.rawValue) sourceType=\(asset.sourceType.rawValue) "
-            + "resources=[\(resourceSummary)]")
 
         let inputOptions = PHContentEditingInputRequestOptions()
         inputOptions.isNetworkAccessAllowed = true
@@ -256,6 +245,30 @@ final class MarginCropScanner: ObservableObject {
             PhotoScanLog.shared.note("トリミング失敗: \(shortID) 書き込み失敗: \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
+        // 5 independent hypotheses (Live Photo, PNG-format mismatch,
+        // screenshot-specific, empty adjustmentData, a single retry) have
+        // all been disproven by this same 3303 recurring regardless -- every
+        // logged apply in this app's history has failed with it. Rather than
+        // keep guessing one variable at a time, dump every input this app
+        // actually has visibility into right before the call that fails, so
+        // the next real-device run gives something to work from instead of
+        // another blind hypothesis.
+        let attributes = try? FileManager.default.attributesOfItem(atPath: output.renderedContentURL.path)
+        let writtenSize = (attributes?[.size] as? Int) ?? -1
+        let inputPathExists = FileManager.default.fileExists(atPath: imageURL.path)
+        let isInCloud = inputInfo[PHContentEditingInputResultIsInCloudKey] as? Bool ?? false
+        PhotoScanLog.shared.note(
+            "トリミング診断: \(shortID) "
+            + "asset[mediaType=\(asset.mediaType.rawValue) mediaSubtypes=\(asset.mediaSubtypes.rawValue) "
+            + "sourceType=\(asset.sourceType.rawValue) pixelW=\(asset.pixelWidth) pixelH=\(asset.pixelHeight) "
+            + "isHidden=\(asset.isHidden) burst=\(asset.representsBurst) "
+            + "canContent=\(asset.canPerform(.content)) canProperties=\(asset.canPerform(.properties))] "
+            + "resources=[\(resourceSummary)] "
+            + "input[uti=\(input.uniformTypeIdentifier) orientation=\(input.fullSizeImageOrientation) "
+            + "isInCloud=\(isInCloud) fullSizeURL存在=\(inputPathExists) "
+            + "adjustmentData=\(input.adjustmentData != nil)] "
+            + "output[url存在=\(FileManager.default.fileExists(atPath: output.renderedContentURL.path)) "
+            + "サイズ=\(writtenSize)bytes 元データ=\(data.count)bytes]")
         // `adjustmentData` deliberately left unset: it is optional, this app
         // has no "recompute the crop" path to justify carrying it, and 3303
         // (`PHPhotosErrorMissingResource`) has now reproduced on an ordinary
@@ -304,10 +317,19 @@ final class MarginCropScanner: ObservableObject {
             // The plain description alone was unhelpful for code 3303
             // ("couldn't be completed") -- the domain/code pinned down what
             // it actually was (PHPhotosErrorMissingResource) well before
-            // the description did, so both are logged for next time.
+            // the description did. Every guessed cause so far (Live Photo,
+            // PNG mismatch, screenshot-specific, adjustmentData) has been
+            // disproven by this same error recurring regardless, so the
+            // full `userInfo` (including any `NSUnderlyingErrorKey`, which
+            // plain `.localizedDescription` never surfaces) is dumped too --
+            // there may be a more specific underlying reason in there that
+            // simply was not being looked at.
+            let underlying = (nsError.userInfo[NSUnderlyingErrorKey] as? NSError)
+                .map { "\($0.domain) code=\($0.code) \($0.localizedDescription) info=\($0.userInfo)" } ?? "なし"
             PhotoScanLog.shared.note(
                 "トリミング失敗: \(shortID) performChanges失敗\(attempt > 1 ? "(再試行後も失敗)" : ""): "
-                + "\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription)")
+                + "\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription) "
+                + "userInfo=\(nsError.userInfo) underlying=[\(underlying)]")
             return .failed(error.localizedDescription)
         }
     }
