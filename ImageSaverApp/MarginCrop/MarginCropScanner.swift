@@ -256,12 +256,19 @@ final class MarginCropScanner: ObservableObject {
             PhotoScanLog.shared.note("トリミング失敗: \(shortID) 書き込み失敗: \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
-        // Identifies this app's own edits without claiming to be able to
-        // re-derive them -- there is no "recompute the crop" path today, only
-        // the system's own revert-to-original.
-        output.adjustmentData = PHAdjustmentData(formatIdentifier: "jp.kaba.imagesaver.margincrop",
-                                                  formatVersion: "1", data: Data())
-
+        // `adjustmentData` deliberately left unset: it is optional, this app
+        // has no "recompute the crop" path to justify carrying it, and 3303
+        // (`PHPhotosErrorMissingResource`) has now reproduced on an ordinary
+        // JPEG with no Live Photo/PNG/screenshot involvement at all (unlike
+        // the PNG-format-mismatch and Live-Photo hypotheses tried earlier,
+        // which were disproven by this same failure recurring on plain
+        // JPEGs) -- pointing at something in how the output itself is built,
+        // not a per-format quirk. The `PHAdjustmentData` this app was
+        // attaching carried an empty `Data()` payload, which is a plausible
+        // case for Photos' internal validation of that resource to fail and
+        // report the whole edit as missing a resource; removing it entirely
+        // sidesteps that surface rather than guessing at a non-empty
+        // replacement payload with no real "adjustment" to encode into it.
         return await performCropChange(asset: asset, output: output, shortID: shortID, candidateID: candidate.id, attempt: 1)
     }
 
