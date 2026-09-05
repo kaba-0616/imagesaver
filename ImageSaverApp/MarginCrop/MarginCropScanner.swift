@@ -225,24 +225,44 @@ final class MarginCropScanner: ObservableObject {
         output.adjustmentData = PHAdjustmentData(formatIdentifier: "jp.kaba.imagesaver.margincrop",
                                                   formatVersion: "1", data: Data())
 
+        return await performCropChange(asset: asset, output: output, shortID: shortID, candidateID: candidate.id, attempt: 1)
+    }
+
+    /// Split out from `apply(_:)` so a failure can retry itself: a real
+    /// device hit `PHPhotosErrorDomain` code 3303 (`PHPhotosErrorMissingResource`)
+    /// on more than one otherwise-ordinary candidate (not only Live Photos,
+    /// which are rejected earlier), and neither Apple's own documentation
+    /// nor its developer forums pin down a specific cause. One retry after
+    /// a short wait is cheap and harmless either way -- it would clear the
+    /// error if it turns out to be Photos still finishing some internal
+    /// bookkeeping shortly after the asset was created/imported, and costs
+    /// only one extra second if it is not.
+    private func performCropChange(asset: PHAsset, output: PHContentEditingOutput,
+                                    shortID: String, candidateID: String, attempt: Int) async -> ApplyOutcome {
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetChangeRequest(for: asset).contentEditingOutput = output
             }
-            candidates.removeAll { $0.id == candidate.id }
+            candidates.removeAll { $0.id == candidateID }
             return .done
         } catch {
-            if (error as NSError).code == NSUserCancelledError {
+            let nsError = error as NSError
+            if nsError.code == NSUserCancelledError {
                 PhotoScanLog.shared.note("トリミングキャンセル: \(shortID)")
                 return .cancelled
+            }
+            if nsError.domain == PHPhotosErrorDomain, nsError.code == 3303, attempt == 1 {
+                PhotoScanLog.shared.note("トリミング再試行: \(shortID) (PHPhotosErrorMissingResourceのため1秒後に再試行)")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                return await performCropChange(asset: asset, output: output, shortID: shortID,
+                                                candidateID: candidateID, attempt: 2)
             }
             // The plain description alone was unhelpful for code 3303
             // ("couldn't be completed") -- the domain/code pinned down what
             // it actually was (PHPhotosErrorMissingResource) well before
             // the description did, so both are logged for next time.
-            let nsError = error as NSError
             PhotoScanLog.shared.note(
-                "トリミング失敗: \(shortID) performChanges失敗: "
+                "トリミング失敗: \(shortID) performChanges失敗\(attempt > 1 ? "(再試行後も失敗)" : ""): "
                 + "\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription)")
             return .failed(error.localizedDescription)
         }

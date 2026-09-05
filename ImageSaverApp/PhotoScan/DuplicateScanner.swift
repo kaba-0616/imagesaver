@@ -1015,20 +1015,45 @@ final class DuplicateScanner: ObservableObject {
                 wanted.append(identifier)
             }
         }
-        guard !wanted.isEmpty else {
+        scheduleDetailsChunk(wanted, token: groupToken)
+    }
+
+    /// How many identifiers one `ioQueue` trip asks `AssetDetailReader` for
+    /// at once -- see `scheduleDetailsChunk`.
+    private static let detailsChunkSize = 300
+
+    /// Runs one chunk on `ioQueue`, applies it, then schedules the next --
+    /// rather than handing the whole (possibly several-thousand-identifier)
+    /// `wanted` list to `ioQueue` in a single call. `ioQueue` is a plain
+    /// serial queue, and `AssetDetailReader.details(for:)` is an unbatched
+    /// per-asset round trip to the Photos daemon; on a real device with a
+    /// library large enough to survive grouping in the thousands, a single
+    /// giant call could run for minutes. Worse, a second `loadDetails()`
+    /// call from a level change or rescan just queues silently behind that
+    /// one on the same serial queue and cannot start until it finishes --
+    /// and once it does finish, `applyDetails`'s stale-token guard throws
+    /// the whole result away with no way to tell from the outside that any
+    /// of it happened. Chunking bounds how long a now-stale token keeps
+    /// occupying the queue: at most one chunk's worth of wasted work,
+    /// checked again before every next chunk, instead of the entire batch.
+    private func scheduleDetailsChunk(_ remaining: [String], token: Int) {
+        guard token == groupToken else { return }
+        guard !remaining.isEmpty else {
             // Nothing left to ask for, so whatever is missing now is missing
             // for good and the ordering above was the final one.
             reportMissingSizes(in: groups, pending: false)
             return
         }
-
-        let token = groupToken
+        let chunk = Array(remaining.prefix(Self.detailsChunkSize))
+        let rest = Array(remaining.dropFirst(Self.detailsChunkSize))
         Self.ioQueue.async {
             let started = CFAbsoluteTimeGetCurrent()
-            let found = AssetDetailReader.details(for: wanted)
+            let found = AssetDetailReader.details(for: chunk)
             let elapsed = PhotoScanFormat.milliseconds(since: started)
             Task { @MainActor [weak self] in
-                self?.applyDetails(found, token: token, milliseconds: elapsed)
+                guard let self, self.groupToken == token else { return }
+                self.applyDetails(found, token: token, milliseconds: elapsed)
+                self.scheduleDetailsChunk(rest, token: token)
             }
         }
     }
@@ -1082,7 +1107,11 @@ final class DuplicateScanner: ObservableObject {
                                   croppedIdentifiers: group.croppedIdentifiers)
         }
         refreshGroupIndex()
-        reportMissingSizes(in: groups, pending: false)
+        // Not reported here: with `scheduleDetailsChunk` delivering results
+        // one chunk at a time, this call can land while later chunks are
+        // still pending -- reporting "could not be obtained" (pending:
+        // false) here would be premature. `scheduleDetailsChunk` reports it
+        // itself once every chunk has actually finished.
 
         if changed { saveFingerprints() }
         let unknown = found.values.filter { $0.byteCount == nil }.count
