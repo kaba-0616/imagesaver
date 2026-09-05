@@ -269,19 +269,21 @@ final class MarginCropScanner: ObservableObject {
             + "adjustmentData=\(input.adjustmentData != nil)] "
             + "output[url存在=\(FileManager.default.fileExists(atPath: output.renderedContentURL.path)) "
             + "サイズ=\(writtenSize)bytes 元データ=\(data.count)bytes]")
-        // `adjustmentData` deliberately left unset: it is optional, this app
-        // has no "recompute the crop" path to justify carrying it, and 3303
-        // (`PHPhotosErrorMissingResource`) has now reproduced on an ordinary
-        // JPEG with no Live Photo/PNG/screenshot involvement at all (unlike
-        // the PNG-format-mismatch and Live-Photo hypotheses tried earlier,
-        // which were disproven by this same failure recurring on plain
-        // JPEGs) -- pointing at something in how the output itself is built,
-        // not a per-format quirk. The `PHAdjustmentData` this app was
-        // attaching carried an empty `Data()` payload, which is a plausible
-        // case for Photos' internal validation of that resource to fail and
-        // report the whole edit as missing a resource; removing it entirely
-        // sidesteps that surface rather than guessing at a non-empty
-        // replacement payload with no real "adjustment" to encode into it.
+        // Every diagnostic this app can see (build162: asset/resources/
+        // input/output all normal, `NSError.userInfo` completely empty) came
+        // back clean, and both an empty `Data()` adjustmentData (build151-159)
+        // and no adjustmentData at all (build160-162) failed identically --
+        // the one remaining untried variant is a genuinely *non-empty*
+        // payload, in case Photos' internal validation for this resource
+        // rejects a zero-byte one specifically (rather than the property
+        // being unset, which apparently made no difference either). This is
+        // a low-confidence guess -- there is no real "recompute" data to put
+        // here -- but it is the last cheap, mechanically different thing
+        // left to try before concluding this is unreachable from inside the
+        // app without a device sysdiagnose.
+        let adjustmentPayload = try? JSONEncoder().encode(["cropRect": "\(candidate.cropRect)"])
+        output.adjustmentData = PHAdjustmentData(formatIdentifier: "jp.kaba.imagesaver.margincrop",
+                                                  formatVersion: "1", data: adjustmentPayload ?? Data([0]))
         return await performCropChange(asset: asset, output: output, shortID: shortID, candidateID: candidate.id, attempt: 1)
     }
 
