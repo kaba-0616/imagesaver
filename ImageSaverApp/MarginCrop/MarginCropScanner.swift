@@ -56,11 +56,14 @@ final class MarginCropScanner: ObservableObject {
         access = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     }
 
-    /// Only actually re-scans when the level changed -- unchanged, this is a
-    /// no-op, the same shape as `DuplicateScanner.commitLevel`.
+    /// Pressing "この設定で再スキャン" is itself an explicit request to
+    /// scan again -- skipping the scan whenever the slider happened to land
+    /// back on the already-stored level (e.g. re-checking after a detector
+    /// change, or wanting to pick up newly added photos) silently did
+    /// nothing and gave no feedback that it had, which read as the scan
+    /// being stuck rather than as it having never started.
     func commitLevel(_ value: Int) {
         let next = MarginLevel.clamp(value)
-        guard next != level else { return }
         level = next
         MarginLevel.store(next)
         scan()
