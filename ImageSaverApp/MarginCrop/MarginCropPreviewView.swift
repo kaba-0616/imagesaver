@@ -38,6 +38,11 @@ struct MarginCropPreviewView: View {
     /// against a light backdrop and a black one against a dark backdrop --
     /// switching this is how a check can actually see either edge clearly.
     @State private var backgroundIsWhite = false
+    /// Opens `MarginDiagnosticView` preloaded on whichever candidate is on
+    /// screen -- added after a real-device diagnosis session where finding
+    /// the same photo again through the picker was the slow part.
+    @State private var showingDiagnostic = false
+    @State private var detail: AssetDetail?
 
     init(scanner: MarginCropScanner, items: [MarginCropCandidate], startIndex: Int, onClose: @escaping () -> Void) {
         self.scanner = scanner
@@ -74,6 +79,24 @@ struct MarginCropPreviewView: View {
             }
         }
         .onChange(of: pages.isEmpty) { empty in if empty { onClose() } }
+        .task(id: candidate?.id) {
+            guard let candidate else { detail = nil; return }
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [candidate.localIdentifier], options: nil).firstObject else {
+                detail = nil
+                return
+            }
+            detail = AssetDetailReader.detail(of: asset)
+        }
+        .sheet(isPresented: $showingDiagnostic) {
+            NavigationView {
+                MarginDiagnosticView(presetLocalIdentifier: candidate?.localIdentifier)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("閉じる") { showingDiagnostic = false }
+                        }
+                    }
+            }
+        }
     }
 
     /// The one color everything in this overlay chrome uses -- flips with
@@ -89,6 +112,13 @@ struct MarginCropPreviewView: View {
             modeToggle
             Spacer()
             Button {
+                showingDiagnostic = true
+            } label: {
+                Image(systemName: "stethoscope")
+                    .font(.title3)
+                    .foregroundColor(foreground)
+            }
+            Button {
                 backgroundIsWhite.toggle()
             } label: {
                 Image(systemName: backgroundIsWhite ? "circle.righthalf.filled" : "circle.lefthalf.filled")
@@ -97,6 +127,31 @@ struct MarginCropPreviewView: View {
             }
         }
         .padding(16)
+        .overlay(centerInfo)
+    }
+
+    /// Filename + shooting date/time, the same information
+    /// `DuplicatePreviewView`'s fullscreen shows -- reading it here answers
+    /// "which photo is this" without leaving the preview to check the
+    /// Photos app.
+    @ViewBuilder
+    private var centerInfo: some View {
+        if let candidate {
+            VStack(spacing: 1) {
+                Text(PhotoScanFormat.dayTime(candidate.creationDate))
+                    .font(.caption)
+                    .foregroundColor(foreground)
+                if let name = detail?.originalFilename {
+                    Text(name)
+                        .font(.caption2)
+                        .foregroundColor(foreground.opacity(0.75))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .frame(maxWidth: 160)
+            .allowsHitTesting(false)
+        }
     }
 
     /// A plain `Picker(.segmented)` on a black backdrop is what prompted
@@ -212,6 +267,18 @@ private struct MarginCropPhotoPage: View {
     let showingAfter: Bool
 
     @State private var image: UIImage?
+    // Pinch-to-zoom, added so a checked edge can be inspected up close
+    // rather than trusting the fit-to-screen size alone. The pan
+    // `DragGesture`'s `GestureMask` (`.subviews`, i.e. effectively absent,
+    // at rest; `.all` only once zoomed) is the same trick
+    // `DuplicatePreviewView` uses for the identical problem: the parent
+    // `TabView(.page)` and a plain pan gesture both want the same one-
+    // finger drag, and this deployment target (iOS 15) has no
+    // `.scrollDisabled` to arbitrate between them directly.
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var panOffset: CGSize = .zero
+    @State private var lastPanOffset: CGSize = .zero
 
     var body: some View {
         Group {
@@ -234,13 +301,53 @@ private struct MarginCropPhotoPage: View {
                         }
                     }
                     .frame(width: geometry.size.width, height: geometry.size.height)
+                    .scaleEffect(scale)
+                    .offset(panOffset)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                panOffset = CGSize(width: lastPanOffset.width + value.translation.width,
+                                                    height: lastPanOffset.height + value.translation.height)
+                            }
+                            .onEnded { _ in lastPanOffset = panOffset },
+                        including: scale > 1.01 ? .all : .subviews
+                    )
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                scale = max(1, min(4, lastScale * value))
+                            }
+                            .onEnded { _ in
+                                lastScale = scale
+                                if scale <= 1.01 {
+                                    scale = 1
+                                    lastScale = 1
+                                    panOffset = .zero
+                                    lastPanOffset = .zero
+                                }
+                            }
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation {
+                            scale = 1
+                            lastScale = 1
+                            panOffset = .zero
+                            lastPanOffset = .zero
+                        }
+                    }
                 }
                 .padding()
             } else {
                 ProgressView().tint(.white)
             }
         }
-        .task(id: candidate.id) { load() }
+        .task(id: candidate.id) {
+            scale = 1
+            lastScale = 1
+            panOffset = .zero
+            lastPanOffset = .zero
+            load()
+        }
     }
 
     private func fitSize(for imageSize: CGSize, in bounds: CGSize) -> CGSize {

@@ -10,6 +10,12 @@ import UIKit
 /// part of the normal scan/trim flow.
 struct MarginDiagnosticView: View {
 
+    /// When set, this screen loads straight from that asset instead of
+    /// opening the picker -- lets the fullscreen preview jump a candidate
+    /// it is already showing directly into diagnosis, rather than making
+    /// the user re-find the same photo through the picker.
+    var presetLocalIdentifier: String?
+
     @State private var showingPicker = false
     @State private var rows: [MarginDetector.EdgeDiagnosticRow]?
     @State private var pickedSize: String?
@@ -57,6 +63,44 @@ struct MarginDiagnosticView: View {
                 pickedSize = size
                 lastImage = image
                 rerun()
+            }
+        }
+        .task {
+            guard lastImage == nil, let presetLocalIdentifier else { return }
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [presetLocalIdentifier], options: nil).firstObject else {
+                errorText = "写真が見つかりませんでした"
+                return
+            }
+            guard let (image, size) = await Self.downsample(asset: asset) else {
+                errorText = "画像の読み込みに失敗しました"
+                return
+            }
+            pickedSize = size
+            lastImage = image
+            rerun()
+        }
+    }
+
+    /// Fetches and downsamples a `PHAsset` the same way `MarginDiagnosticPicker`
+    /// downsamples a picked `UIImage` -- 512x512 aspect fit, matching what a
+    /// real scan would have fed into `MarginDetector`.
+    private static func downsample(asset: PHAsset) async -> (CGImage, String)? {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            options.isSynchronous = false
+            let target = CGSize(width: 512, height: 512)
+            PHImageManager.default().requestImage(for: asset, targetSize: target, contentMode: .aspectFit,
+                                                  options: options) { image, info in
+                let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                guard !degraded, let image, let cgImage = image.cgImage else {
+                    if degraded { return }
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let label = "\(asset.pixelWidth)x\(asset.pixelHeight)"
+                continuation.resume(returning: (cgImage, label))
             }
         }
     }

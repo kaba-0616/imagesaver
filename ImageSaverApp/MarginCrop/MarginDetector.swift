@@ -311,8 +311,28 @@ enum MarginDetector {
             depths.append(depth)
         }
 
+        // The literal minimum across every column/row was trusted as "the
+        // safe cut line" on the theory that a column can only ever run
+        // *deeper* than the true edge (corner interference from a
+        // perpendicular border), never shallower. Real diagnostic data
+        // disproved that: a single anomalous column -- an iPhone home
+        // indicator sitting inside an otherwise plain bottom bar, a speck
+        // of noise, one pixel of anti-aliasing -- can end its own run early
+        // for reasons unrelated to where the true edge is, and the raw
+        // minimum has no defense against it: one such column silently
+        // capped an entire edge's detected depth to a fraction of its real
+        // size on more than one real photo. `inlierFraction` already
+        // tolerates a minority of columns disagreeing with the rest without
+        // rejecting the edge outright -- cutting at a low percentile instead
+        // of the bare minimum extends that same tolerance to the depth value
+        // itself, so a small minority of shallow outliers can no longer set
+        // the depth for the whole edge, while the vast majority of columns
+        // still have to reach at least this deep (the same "never touch
+        // real content" safety the minimum was meant to provide).
         let sorted = depths.sorted()
-        guard let shallowest = sorted.first, shallowest > 0 else {
+        let outlierAllowance = min(sorted.count - 1, sorted.count / 50)
+        let shallowest = sorted[outlierAllowance]
+        guard shallowest > 0 else {
             return result(0, matchFraction: baseline.matchFraction, saturation: baseline.saturation,
                           luminance: luminance, rejectedAt: "深さ0")
         }
