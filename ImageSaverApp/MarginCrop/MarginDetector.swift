@@ -219,16 +219,46 @@ enum MarginDetector {
     /// boundary a straight line -- which is what a colored studio backdrop,
     /// however uniform, essentially never manages to do across the whole
     /// width or height at once.
+    /// Every intermediate number `marginDepth` computes on the way to its
+    /// pass/fail decision, plus which gate (if any) rejected the edge --
+    /// exposed so `diagnose(in:realWidth:realHeight:level:)` can print real
+    /// measured values for one photo instead of guessing why an edge did or
+    /// didn't qualify.
+    struct EdgeDiagnostics {
+        let matchFraction: Double
+        let saturation: Double
+        let luminance: Double
+        let shallowest: Int
+        let inlierFraction: Double
+        let depth: Int
+        let rejectedAt: String?
+    }
+
     private static func marginDepth(rows: [[UInt8]], width: Int, height: Int,
                                      from edge: Edge, tolerance: Int, minMatchFraction: Double) -> Int {
+        edgeDiagnostics(rows: rows, width: width, height: height, edge: edge,
+                        tolerance: tolerance, minMatchFraction: minMatchFraction).depth
+    }
+
+    private static func edgeDiagnostics(rows: [[UInt8]], width: Int, height: Int, edge: Edge,
+                                         tolerance: Int, minMatchFraction: Double) -> EdgeDiagnostics {
         let isHorizontal = edge == .top || edge == .bottom
         let lineCount = isHorizontal ? height : width
         let sampleCount = isHorizontal ? width : height
-        guard lineCount > 0, sampleCount > 0 else { return 0 }
+        func result(_ depth: Int, matchFraction: Double = 0, saturation: Double = 0, luminance: Double = 0,
+                    shallowest: Int = 0, inlierFraction: Double = 0, rejectedAt: String? = nil) -> EdgeDiagnostics {
+            EdgeDiagnostics(matchFraction: matchFraction, saturation: saturation, luminance: luminance,
+                            shallowest: shallowest, inlierFraction: inlierFraction, depth: depth, rejectedAt: rejectedAt)
+        }
+        guard lineCount > 0, sampleCount > 0 else { return result(0, rejectedAt: "画像サイズ") }
 
         let saturationLimit = Double(MarginLevel.saturationLimit)
         let baseline = robustBaseline(rows: rows, width: width, height: height, edge: edge, tolerance: tolerance)
-        guard baseline.matchFraction >= minMatchFraction, baseline.saturation <= saturationLimit else { return 0 }
+        let luminance = (baseline.r + baseline.g + baseline.b) / 3
+        guard baseline.matchFraction >= minMatchFraction, baseline.saturation <= saturationLimit else {
+            return result(0, matchFraction: baseline.matchFraction, saturation: baseline.saturation,
+                          luminance: luminance, rejectedAt: "一致率/彩度")
+        }
 
         // A synthetic white/black bar sits at the extreme ends of luminance;
         // a photographed "black" background almost never does (ambient
@@ -245,8 +275,10 @@ enum MarginDetector {
         // this is meant to keep catching, not exclude.
         let nearBlackMax = 40.0
         let nearWhiteMin = 220.0
-        let luminance = (baseline.r + baseline.g + baseline.b) / 3
-        guard luminance <= nearBlackMax || luminance >= nearWhiteMin else { return 0 }
+        guard luminance <= nearBlackMax || luminance >= nearWhiteMin else {
+            return result(0, matchFraction: baseline.matchFraction, saturation: baseline.saturation,
+                          luminance: luminance, rejectedAt: "輝度")
+        }
 
         // A 3-wide average across the sample axis, not a single pixel --
         // compression noise on one bare pixel would otherwise stop a column
@@ -280,7 +312,10 @@ enum MarginDetector {
         }
 
         let sorted = depths.sorted()
-        guard let shallowest = sorted.first, shallowest > 0 else { return 0 }
+        guard let shallowest = sorted.first, shallowest > 0 else {
+            return result(0, matchFraction: baseline.matchFraction, saturation: baseline.saturation,
+                          luminance: luminance, rejectedAt: "深さ0")
+        }
 
         // Consistency is judged against the median, and against how many
         // columns/rows agree with it, rather than the mean and an average
@@ -303,14 +338,47 @@ enum MarginDetector {
         // against the median instead of the mean.
         let inlierTolerance = max(2.0, median * 0.10)
         let inlierCount = depths.reduce(0) { abs(Double($1) - median) <= inlierTolerance ? $0 + 1 : $0 }
-        guard Double(inlierCount) / Double(depths.count) >= 0.7 else { return 0 }
+        let inlierFraction = Double(inlierCount) / Double(depths.count)
+        guard inlierFraction >= 0.7 else {
+            return result(0, matchFraction: baseline.matchFraction, saturation: baseline.saturation,
+                          luminance: luminance, shallowest: shallowest, inlierFraction: inlierFraction,
+                          rejectedAt: "列の一貫性")
+        }
 
         // The shallowest column/row is the safe cut line: trusting the
         // median instead could still shave into the one column where the
         // subject actually starts earliest. Corner outliers only ever run
         // deeper than the true edge, never shallower, so they cannot distort
         // this minimum even though they were left in `depths`.
-        return shallowest
+        return result(shallowest, matchFraction: baseline.matchFraction, saturation: baseline.saturation,
+                      luminance: luminance, shallowest: shallowest, inlierFraction: inlierFraction, rejectedAt: nil)
+    }
+
+    /// Runs the same per-edge measurements `detect` uses, but returns every
+    /// intermediate number instead of collapsing them into a pass/fail --
+    /// for a debug screen that lets a real failing photo be measured
+    /// directly, rather than guessing which threshold is wrong from a
+    /// screenshot alone.
+    static func diagnose(in image: CGImage, level: Int) -> [(edge: String, diagnostics: EdgeDiagnostics)]? {
+        let sampleWidth = image.width
+        let sampleHeight = image.height
+        guard sampleWidth > 8, sampleHeight > 8, let rows = pixelRows(of: image, width: sampleWidth, height: sampleHeight) else {
+            return nil
+        }
+        let tolerance = MarginLevel.colorTolerance(for: level)
+        let minMatchFraction = MarginLevel.minMatchFraction(for: level)
+        return [.top, .bottom, .left, .right].map { edge in
+            let label: String
+            switch edge {
+            case .top: label = "上"
+            case .bottom: label = "下"
+            case .left: label = "左"
+            case .right: label = "右"
+            }
+            let diagnostics = edgeDiagnostics(rows: rows, width: sampleWidth, height: sampleHeight, edge: edge,
+                                               tolerance: tolerance, minMatchFraction: minMatchFraction)
+            return (label, diagnostics)
+        }
     }
 
     /// Runs `VNDetectRectanglesRequest` on the same downsample the color

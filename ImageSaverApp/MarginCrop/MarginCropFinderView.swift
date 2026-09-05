@@ -92,6 +92,11 @@ struct MarginCropFinderView: View {
                         showingLog = true
                     }
                 }
+                Section {
+                    NavigationLink("診断: 写真を選んで判定値を見る") {
+                        MarginDiagnosticView()
+                    }
+                }
             }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
