@@ -339,7 +339,17 @@ enum MarginDetector {
         let inlierTolerance = max(2.0, median * 0.10)
         let inlierCount = depths.reduce(0) { abs(Double($1) - median) <= inlierTolerance ? $0 + 1 : $0 }
         let inlierFraction = Double(inlierCount) / Double(depths.count)
-        guard inlierFraction >= 0.7 else {
+        // The diagnostic screen measured a real, genuine four-sided black
+        // border (matchFraction 1.00, luminance 0, all four edges deep
+        // relative to the thumbnail) landing at 0.53-0.60 here -- comfortably
+        // *below* the 0.7 this was originally set to, so that reference case
+        // was being rejected outright regardless of every other gate already
+        // passing cleanly. The corner-interference problem this check exists
+        // to tolerate (see above) gets worse, not better, as all four
+        // margins get deeper relative to the image -- exactly the case this
+        // was suppose to catch. 0.5 is chosen directly from that measured
+        // floor (0.53) with a small margin, not a guess.
+        guard inlierFraction >= 0.5 else {
             return result(0, matchFraction: baseline.matchFraction, saturation: baseline.saturation,
                           luminance: luminance, shallowest: shallowest, inlierFraction: inlierFraction,
                           rejectedAt: "列の一貫性")

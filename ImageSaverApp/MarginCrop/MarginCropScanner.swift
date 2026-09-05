@@ -269,21 +269,15 @@ final class MarginCropScanner: ObservableObject {
             + "adjustmentData=\(input.adjustmentData != nil)] "
             + "output[url存在=\(FileManager.default.fileExists(atPath: output.renderedContentURL.path)) "
             + "サイズ=\(writtenSize)bytes 元データ=\(data.count)bytes]")
-        // Every diagnostic this app can see (build162: asset/resources/
-        // input/output all normal, `NSError.userInfo` completely empty) came
-        // back clean, and both an empty `Data()` adjustmentData (build151-159)
-        // and no adjustmentData at all (build160-162) failed identically --
-        // the one remaining untried variant is a genuinely *non-empty*
-        // payload, in case Photos' internal validation for this resource
-        // rejects a zero-byte one specifically (rather than the property
-        // being unset, which apparently made no difference either). This is
-        // a low-confidence guess -- there is no real "recompute" data to put
-        // here -- but it is the last cheap, mechanically different thing
-        // left to try before concluding this is unreachable from inside the
-        // app without a device sysdiagnose.
-        let adjustmentPayload = try? JSONEncoder().encode(["cropRect": "\(candidate.cropRect)"])
+        // build163's non-empty JSON adjustmentData changed the failure from
+        // 3303 (missingResource) to 3302 (unconfirmed exact meaning, but a
+        // *different* code proves Photos got further before rejecting it --
+        // the adjustmentData itself is being validated, not ignored). Next
+        // cheap variant: the simplest possible non-empty payload, to see
+        // whether a JSON-parseable byte sequence specifically is what gets
+        // rejected, versus any non-empty payload at all.
         output.adjustmentData = PHAdjustmentData(formatIdentifier: "jp.kaba.imagesaver.margincrop",
-                                                  formatVersion: "1", data: adjustmentPayload ?? Data([0]))
+                                                  formatVersion: "1", data: Data([0]))
         return await performCropChange(asset: asset, output: output, shortID: shortID, candidateID: candidate.id, attempt: 1)
     }
 
