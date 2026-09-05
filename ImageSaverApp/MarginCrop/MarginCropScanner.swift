@@ -176,6 +176,17 @@ final class MarginCropScanner: ObservableObject {
 
         let inputOptions = PHContentEditingInputRequestOptions()
         inputOptions.isNetworkAccessAllowed = true
+        // Untried surface: this defaults to rejecting every existing
+        // adjustment, which is normally fine for a plain unedited photo,
+        // but 6 other variables (Live Photo exclusion, PNG-format matching,
+        // 3 adjustmentData states) have all failed to explain 3303/3302 on
+        // otherwise-ordinary assets. If Photos considers the asset to
+        // already carry some adjustment this app cannot vouch for, it may
+        // be substituting a different (already-rendered) resource as
+        // `fullSizeImageURL` than the one it expects back at commit time --
+        // claiming this app can handle any adjustment sidesteps that
+        // substitution rather than guessing at its cause.
+        inputOptions.canHandleAdjustmentData = { _ in true }
         var inputInfo: [AnyHashable: Any] = [:]
         let input: PHContentEditingInput? = await withCheckedContinuation { continuation in
             asset.requestContentEditingInput(with: inputOptions) { input, info in
