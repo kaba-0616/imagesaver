@@ -325,11 +325,24 @@ struct MarginCropFinderView: View {
         isMutatingGrid = true
         let targets = scanner.candidates.filter { selected.contains($0.id) }
         var succeeded = 0
+        var failed = 0
+        var cancelled = 0
         for candidate in targets {
-            if await scanner.apply(candidate) == .done { succeeded += 1 }
+            switch await scanner.apply(candidate) {
+            case .done: succeeded += 1
+            case .cancelled: cancelled += 1
+            case .failed: failed += 1
+            }
         }
         selected.removeAll()
-        message = "\(succeeded) / \(targets.count)枚をトリミングしました"
+        // PHPhotosErrorDomain 3303/3302 (unresolved, see plan notes) means a
+        // real bulk run can fail on some photos while succeeding on others --
+        // each failure is already logged individually by `scanner.apply`, so
+        // this summary only needs to tell the user how the run broke down,
+        // not why.
+        message = "成功\(succeeded)件 / 失敗\(failed)件"
+            + (cancelled > 0 ? " / キャンセル\(cancelled)件" : "")
+            + " (全\(targets.count)件)"
         isMutatingGrid = false
     }
 
