@@ -1,6 +1,7 @@
 import CoreImage
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
 /// Orchestrates the margin-trim feature: scan the whole library for photos
 /// with a detectable uniform-color margin, then apply or skip each one the
@@ -229,15 +230,25 @@ final class MarginCropScanner: ObservableObject {
             PhotoScanLog.shared.note("トリミング失敗: \(shortID) トリミング画像の生成に失敗")
             return .failed("トリミング画像の生成に失敗しました")
         }
-        guard let data = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.95) else {
+        // `renderedContentURL`'s file extension is chosen by Photos to match
+        // the original resource's format (confirmed on a real device: a PNG
+        // screenshot's `renderedContentURL` ends in .png) -- always writing
+        // JPEG bytes there, regardless of that extension, mismatches the
+        // file's declared format against its actual magic bytes. That
+        // mismatch is a plausible cause of the PHPhotosErrorMissingResource
+        // (3303) failure seen consistently (3/3 attempts) on a PNG
+        // screenshot: Photos may be unable to read back what it considers a
+        // malformed/wrong-format resource and reports it as missing rather
+        // than corrupt. Matching the original UTI here is a cheap, testable
+        // fix for that specific case; JPEG remains the default for every
+        // other format this app has seen so far (HEIC, JPEG).
+        let originalUTI = PHAssetResource.assetResources(for: asset).first?.uniformTypeIdentifier
+        let isPNG = originalUTI == UTType.png.identifier
+        let uiImage = UIImage(cgImage: cgImage)
+        guard let data = isPNG ? uiImage.pngData() : uiImage.jpegData(compressionQuality: 0.95) else {
             PhotoScanLog.shared.note("トリミング失敗: \(shortID) 画像の書き出しに失敗")
             return .failed("画像の書き出しに失敗しました")
         }
-
-        // `PHContentEditingOutput` has no format property to set -- Photos
-        // determines the rendered content's format by reading the file
-        // itself, so writing valid JPEG bytes to `renderedContentURL` is
-        // sufficient regardless of whether the original was JPEG or HEIC.
         let output = PHContentEditingOutput(contentEditingInput: input)
         do {
             try data.write(to: output.renderedContentURL, options: .atomic)
