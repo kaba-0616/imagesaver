@@ -58,6 +58,8 @@ struct MarginCropPreviewView: View {
             (backgroundIsWhite ? Color.white : Color.black).ignoresSafeArea()
             VStack(spacing: 0) {
                 topBar
+                centerInfo
+                    .padding(.bottom, 8)
                 TabView(selection: $index) {
                     ForEach(Array(pages.enumerated()), id: \.element.id) { i, page in
                         MarginCropPhotoPage(candidate: page, showingAfter: showingAfter)
@@ -127,13 +129,15 @@ struct MarginCropPreviewView: View {
             }
         }
         .padding(16)
-        .overlay(centerInfo)
     }
 
     /// Filename + shooting date/time, the same information
     /// `DuplicatePreviewView`'s fullscreen shows -- reading it here answers
     /// "which photo is this" without leaving the preview to check the
-    /// Photos app.
+    /// Photos app. A row of its own under `topBar` rather than an
+    /// `.overlay` on it -- overlaying centered content on an `HStack` that
+    /// already centers `modeToggle` put both at the same screen position,
+    /// so they rendered on top of each other.
     @ViewBuilder
     private var centerInfo: some View {
         if let candidate {
@@ -149,8 +153,7 @@ struct MarginCropPreviewView: View {
                         .truncationMode(.middle)
                 }
             }
-            .frame(maxWidth: 160)
-            .allowsHitTesting(false)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -303,6 +306,7 @@ private struct MarginCropPhotoPage: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .scaleEffect(scale)
                     .offset(panOffset)
+                    .clipped()
                     .gesture(
                         DragGesture()
                             .onChanged { value in

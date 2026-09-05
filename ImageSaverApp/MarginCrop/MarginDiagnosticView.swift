@@ -81,10 +81,17 @@ struct MarginDiagnosticView: View {
         }
     }
 
-    /// Fetches and downsamples a `PHAsset` the same way `MarginDiagnosticPicker`
-    /// downsamples a picked `UIImage` -- 512x512 aspect fit, matching what a
-    /// real scan would have fed into `MarginDetector`.
-    private static func downsample(asset: PHAsset) async -> (CGImage, String)? {
+    /// Fetches and downsamples a `PHAsset` through the exact same API
+    /// (`PHImageManager.requestImage`, 512x512 aspect fit) `MarginCropScanner
+    /// .performScan` uses for the real scan -- so a number this screen shows
+    /// is guaranteed to be what a real scan actually computed, not a
+    /// approximation from a differently-built downsample. `MarginDiagnosticPicker`
+    /// used to build its own with `UIGraphicsImageRenderer`, which turned out
+    /// not to match: the two produced different pixel dimensions for the
+    /// "same" 512x512 target, so numbers taken through the picker and through
+    /// this asset-based path disagreed on real photos even before any
+    /// detection-logic change.
+    static func downsample(asset: PHAsset) async -> (CGImage, String)? {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
@@ -188,10 +195,11 @@ struct MarginDiagnosticView: View {
     }
 }
 
-/// `PHPickerViewController` wrapper -- limited to one image, and reads back
-/// the same 512x512 aspect-fit `CGImage` the real scan feeds into
-/// `MarginDetector.detect`, so the diagnostic numbers match what a real scan
-/// would have seen for this photo.
+/// `PHPickerViewController` wrapper -- limited to one image. Resolves the
+/// pick back to a `PHAsset` and reuses `MarginDiagnosticView.downsample(asset:)`
+/// so this and the fullscreen-preview diagnostic path always agree; see that
+/// function's comment for why a separate, self-built downsample here used to
+/// disagree with the real scan.
 private struct MarginDiagnosticPicker: UIViewControllerRepresentable {
     let onPicked: (CGImage, String) -> Void
 
@@ -214,13 +222,26 @@ private struct MarginDiagnosticPicker: UIViewControllerRepresentable {
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
-            guard let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: UIImage.self) else { return }
-            provider.loadObject(ofClass: UIImage.self) { object, _ in
+            guard let result = results.first else { return }
+            // `assetIdentifier` (present whenever the picker is backed by
+            // `.shared()`, as it is here) lets this go through the same
+            // `PHImageManager`-based downsample the real scan and the
+            // fullscreen-preview diagnostic path both use -- see
+            // `MarginDiagnosticView.downsample(asset:)`. Falling back to the
+            // item provider's own `UIImage` only covers a picker configured
+            // without library access, which is not this one, but costs
+            // nothing to keep as a safety net.
+            if let identifier = result.assetIdentifier,
+               let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject {
+                Task {
+                    guard let (cgImage, label) = await MarginDiagnosticView.downsample(asset: asset) else { return }
+                    await MainActor.run { self.onPicked(cgImage, label) }
+                }
+                return
+            }
+            guard result.itemProvider.canLoadObject(ofClass: UIImage.self) else { return }
+            result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
                 guard let uiImage = object as? UIImage else { return }
-                // Match the real scan's downsample exactly (512x512, aspect
-                // fit) so the numbers shown here are what a real scan would
-                // have computed for this photo, not a higher- or
-                // lower-resolution stand-in.
                 let target = CGSize(width: 512, height: 512)
                 let scale = min(target.width / uiImage.size.width, target.height / uiImage.size.height, 1)
                 let size = CGSize(width: uiImage.size.width * scale, height: uiImage.size.height * scale)
