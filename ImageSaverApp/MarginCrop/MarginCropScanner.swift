@@ -1,6 +1,6 @@
 import CoreImage
+import ImageIO
 import Photos
-import UIKit
 import UniformTypeIdentifiers
 
 /// Orchestrates the margin-trim feature: scan the whole library for photos
@@ -304,29 +304,39 @@ final class MarginCropScanner: ObservableObject {
         }
         // `renderedContentURL`'s file extension is chosen by Photos to match
         // the original resource's format (confirmed on a real device: a PNG
-        // screenshot's `renderedContentURL` ends in .png) -- always writing
-        // JPEG bytes there, regardless of that extension, mismatches the
-        // file's declared format against its actual magic bytes. That
-        // mismatch is a plausible cause of the PHPhotosErrorMissingResource
-        // (3303) failure seen consistently (3/3 attempts) on a PNG
-        // screenshot: Photos may be unable to read back what it considers a
-        // malformed/wrong-format resource and reports it as missing rather
-        // than corrupt. Matching the original UTI here is a cheap, testable
-        // fix for that specific case; JPEG remains the default for every
-        // other format this app has seen so far (HEIC, JPEG).
+        // screenshot's `renderedContentURL` ends in .png) -- writing through
+        // a destination of a mismatched UTI would mismatch the file's
+        // declared format against its actual magic bytes. Matching the
+        // original UTI here is what build155 already established; JPEG
+        // remains the fallback for the rare case a resource reports no UTI.
         let originalUTI = PHAssetResource.assetResources(for: asset).first?.uniformTypeIdentifier
-        let isPNG = originalUTI == UTType.png.identifier
-        let uiImage = UIImage(cgImage: cgImage)
-        guard let data = isPNG ? uiImage.pngData() : uiImage.jpegData(compressionQuality: 0.95) else {
+        let outputUTI = originalUTI ?? UTType.jpeg.identifier
+        // Untried variable for 3303/3302: UIImage.jpegData()/.pngData()
+        // silently re-encodes into the device's default color space and
+        // drops everything from the original's EXIF/metadata except
+        // orientation (already baked in above via `.oriented`). Every other
+        // guess so far (Live Photo exclusion, PNG-format matching,
+        // adjustmentData in 3 states, a retry) has been disproven by the
+        // same 3303/3302 recurring regardless -- this is the one surface
+        // that was never actually tested. Writing through
+        // CGImageDestination/ImageIO instead, carrying over the original
+        // resource's own metadata dictionary (EXIF, color profile such as
+        // Display P3, etc.), is a cheap, testable way to rule it in or out.
+        guard let metadataSource = CGImageSourceCreateWithURL(imageURL as CFURL, nil) else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 元画像のメタデータ読み込みに失敗")
+            return .failed("元画像のメタデータ読み込みに失敗しました")
+        }
+        let metadata = CGImageSourceCopyPropertiesAtIndex(metadataSource, 0, nil) as? [CFString: Any]
+        let output = PHContentEditingOutput(contentEditingInput: input)
+        guard let destination = CGImageDestinationCreateWithURL(output.renderedContentURL as CFURL,
+                                                                  outputUTI as CFString, 1, nil) else {
+            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 画像の書き出し先の作成に失敗")
+            return .failed("画像の書き出し先の作成に失敗しました")
+        }
+        CGImageDestinationAddImage(destination, cgImage, metadata as CFDictionary?)
+        guard CGImageDestinationFinalize(destination) else {
             PhotoScanLog.shared.note("トリミング失敗: \(shortID) 画像の書き出しに失敗")
             return .failed("画像の書き出しに失敗しました")
-        }
-        let output = PHContentEditingOutput(contentEditingInput: input)
-        do {
-            try data.write(to: output.renderedContentURL, options: .atomic)
-        } catch {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 書き込み失敗: \(error.localizedDescription)")
-            return .failed(error.localizedDescription)
         }
         // 5 independent hypotheses (Live Photo, PNG-format mismatch,
         // screenshot-specific, empty adjustmentData, a single retry) have
@@ -338,7 +348,9 @@ final class MarginCropScanner: ObservableObject {
         // another blind hypothesis.
         let attributes = try? FileManager.default.attributesOfItem(atPath: output.renderedContentURL.path)
         let writtenSize = (attributes?[.size] as? Int) ?? -1
+        let inputAttributes = try? FileManager.default.attributesOfItem(atPath: imageURL.path)
         let inputPathExists = FileManager.default.fileExists(atPath: imageURL.path)
+        let inputSize = (inputAttributes?[.size] as? Int) ?? -1
         let isInCloud = inputInfo[PHContentEditingInputResultIsInCloudKey] as? Bool ?? false
         PhotoScanLog.shared.note(
             "トリミング診断: \(shortID) "
@@ -348,10 +360,10 @@ final class MarginCropScanner: ObservableObject {
             + "canContent=\(asset.canPerform(.content)) canProperties=\(asset.canPerform(.properties))] "
             + "resources=[\(resourceSummary)] "
             + "input[uti=\(input.uniformTypeIdentifier) orientation=\(input.fullSizeImageOrientation) "
-            + "isInCloud=\(isInCloud) fullSizeURL存在=\(inputPathExists) "
+            + "isInCloud=\(isInCloud) fullSizeURL存在=\(inputPathExists) 元ファイルサイズ=\(inputSize)bytes "
             + "adjustmentData=\(input.adjustmentData != nil)] "
             + "output[url存在=\(FileManager.default.fileExists(atPath: output.renderedContentURL.path)) "
-            + "サイズ=\(writtenSize)bytes 元データ=\(data.count)bytes]")
+            + "サイズ=\(writtenSize)bytes metadataあり=\(metadata != nil)]")
         // `adjustmentData` left unset. Every non-empty payload tried (a JSON
         // blob in build163, a single byte in build165) failed identically
         // with 3302 instead of 3303 -- proving adjustmentData's mere
