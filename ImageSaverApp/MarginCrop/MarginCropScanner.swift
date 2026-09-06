@@ -469,6 +469,13 @@ final class MarginCropScanner: ObservableObject {
         counted(total)
 
         var found: [MarginCropCandidate] = []
+        // Tallied rather than logged one-by-one: on a library with many
+        // skipped photos this branch fires on every single scan for every
+        // one of them, which would swamp `PhotoScanLog`'s per-run budget
+        // far worse than detection lines ever did. A re-detection at a
+        // *different* position is the interesting, comparatively rare
+        // event and is still logged individually below.
+        var skippedUnchangedCount = 0
         // Split three ways rather than the plain compute/reuse split
         // DuplicateScanner uses: unlike a fingerprint (roughly the same cost
         // regardless of content), "compute" here is itself bimodal -- most
@@ -538,13 +545,29 @@ final class MarginCropScanner: ObservableObject {
                 }
             }
             if let cached = cache[asset.localIdentifier], isFresh(cached, for: asset, level: level) {
-                if let margin = cached.margin,
-                   !isSkipped(margin, for: asset.localIdentifier, width: cached.width, height: cached.height,
-                              skippedMargins: skippedMargins) {
-                    found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
-                                                      width: cached.width, height: cached.height,
-                                                      creationDate: asset.creationDate,
-                                                      margin: margin))
+                if let margin = cached.margin {
+                    switch skipStatus(margin, for: asset.localIdentifier, width: cached.width, height: cached.height,
+                                       skippedMargins: skippedMargins) {
+                    case .notSkipped:
+                        found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
+                                                          width: cached.width, height: cached.height,
+                                                          creationDate: asset.creationDate,
+                                                          margin: margin))
+                    case .unchanged:
+                        skippedUnchangedCount += 1
+                    case .movedFrom(let previous):
+                        found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
+                                                          width: cached.width, height: cached.height,
+                                                          creationDate: asset.creationDate,
+                                                          margin: margin))
+                        let shortID = String(asset.localIdentifier.prefix(8))
+                        Task { @MainActor in
+                            PhotoScanLog.shared.note(
+                                "スキップ済みだが別位置で再検出: \(shortID) "
+                                + "前回[上\(previous.top) 下\(previous.bottom) 左\(previous.left) 右\(previous.right)] "
+                                + "今回[上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)]")
+                        }
+                    }
                 }
                 return
             }
@@ -571,51 +594,66 @@ final class MarginCropScanner: ObservableObject {
                                                                  height: asset.pixelHeight,
                                                                  level: level,
                                                                  margin: margin)
-            if let margin,
-               !isSkipped(margin, for: asset.localIdentifier, width: asset.pixelWidth, height: asset.pixelHeight,
-                          skippedMargins: skippedMargins) {
-                found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
-                                                  width: asset.pixelWidth, height: asset.pixelHeight,
-                                                  creationDate: asset.creationDate,
-                                                  margin: margin))
-                // Only the freshly-computed detections are logged in detail,
-                // not cache hits replayed on every re-scan -- this is meant
-                // to be read for tuning the detector against real photos,
-                // and repeating the same line every run would just bury the
-                // new ones. `found.count` (which does include cache hits) is
-                // also what caps how many detailed lines get written: a
-                // library with a few hundred candidates would otherwise fill
-                // `PhotoScanLog`'s whole per-run budget (300 lines) with
-                // individual detections and silently lose the one line that
-                // actually says how many were found in total -- which is
-                // exactly what happened on a real run and prompted this cap.
-                let count = found.count
-                if count <= Self.maxDetectionLogLines {
-                    let shortID = String(asset.localIdentifier.prefix(8))
-                    Task { @MainActor in
-                        var line = "余白検出: \(shortID) \(asset.pixelWidth)x\(asset.pixelHeight) "
-                            + "上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)"
-                        // Only Vision actually narrowing/dropping an edge is
-                        // worth a line of its own; a plain confirmation or a
-                        // photo Vision had nothing to say about would just
-                        // repeat the same information for every candidate.
-                        if let note, note != "Visionが一致を確認" {
-                            line += " (\(note))"
+            if let margin {
+                let status = skipStatus(margin, for: asset.localIdentifier, width: asset.pixelWidth,
+                                         height: asset.pixelHeight, skippedMargins: skippedMargins)
+                if case .unchanged = status {
+                    skippedUnchangedCount += 1
+                } else {
+                    found.append(MarginCropCandidate(localIdentifier: asset.localIdentifier,
+                                                      width: asset.pixelWidth, height: asset.pixelHeight,
+                                                      creationDate: asset.creationDate,
+                                                      margin: margin))
+                    // Only the freshly-computed detections are logged in
+                    // detail, not cache hits replayed on every re-scan --
+                    // this is meant to be read for tuning the detector
+                    // against real photos, and repeating the same line
+                    // every run would just bury the new ones. `found.count`
+                    // (which does include cache hits) is also what caps how
+                    // many detailed lines get written: a library with a few
+                    // hundred candidates would otherwise fill
+                    // `PhotoScanLog`'s whole per-run budget (300 lines) with
+                    // individual detections and silently lose the one line
+                    // that actually says how many were found in total --
+                    // which is exactly what happened on a real run and
+                    // prompted this cap.
+                    let count = found.count
+                    if count <= Self.maxDetectionLogLines {
+                        let shortID = String(asset.localIdentifier.prefix(8))
+                        Task { @MainActor in
+                            var line = "余白検出: \(shortID) \(asset.pixelWidth)x\(asset.pixelHeight) "
+                                + "上\(margin.top) 下\(margin.bottom) 左\(margin.left) 右\(margin.right)"
+                            // Only Vision actually narrowing/dropping an edge is
+                            // worth a line of its own; a plain confirmation or a
+                            // photo Vision had nothing to say about would just
+                            // repeat the same information for every candidate.
+                            if let note, note != "Visionが一致を確認" {
+                                line += " (\(note))"
+                            }
+                            // A photo that was previously "これはトリミングしない"
+                            // reappearing here means the detector found it at a
+                            // materially different position this time -- worth
+                            // calling out explicitly rather than looking like an
+                            // ordinary first-time detection.
+                            if case .movedFrom(let previous) = status {
+                                line += " [スキップ済みだが別位置で再検出: 前回 上\(previous.top) "
+                                    + "下\(previous.bottom) 左\(previous.left) 右\(previous.right)]"
+                            }
+                            PhotoScanLog.shared.note(line)
                         }
-                        PhotoScanLog.shared.note(line)
-                    }
-                } else if count == Self.maxDetectionLogLines + 1 {
-                    Task { @MainActor in
-                        PhotoScanLog.shared.note("(以降の検出はログを省略、件数のみ集計)")
-                    }
-                } else if (count - Self.maxDetectionLogLines) % 200 == 0 {
-                    // A running checkpoint independent of the final
-                    // "スキャン完了" line -- if the scan never gets to write
-                    // that line (the app is killed, the user leaves before
-                    // it finishes), this is still there to say how many had
-                    // been found so far.
-                    Task { @MainActor in
-                        PhotoScanLog.shared.note("(集計中) 現在までの検出件数: \(count)件")
+                    } else if count == Self.maxDetectionLogLines + 1 {
+                        Task { @MainActor in
+                            PhotoScanLog.shared.note("(以降の検出はログを省略、件数のみ集計)")
+                        }
+                    } else if (count - Self.maxDetectionLogLines) % 200 == 0 {
+                        // A running checkpoint independent of the final
+                        // "スキャン完了" line -- if the scan never gets to write
+                        // that line (the app is killed, the user leaves before
+                        // it finishes), this is still there to say how many had
+                        // been found so far.
+                        Task { @MainActor in
+                            PhotoScanLog.shared.note("(集計中) 現在までの検出件数: \(count)件")
+                        }
                     }
                 }
             }
@@ -627,7 +665,11 @@ final class MarginCropScanner: ObservableObject {
         if total > 0 { MarginCropCache.save(cache) }
         let foundCount = found.count
         Task { @MainActor in
-            PhotoScanLog.shared.note("余白スキャン完了: 検出\(foundCount)件")
+            var line = "余白スキャン完了: 検出\(foundCount)件"
+            if skippedUnchangedCount > 0 {
+                line += " (「トリミングしない」のまま除外: \(skippedUnchangedCount)件)"
+            }
+            PhotoScanLog.shared.note(line)
         }
         finished(found)
     }
@@ -676,21 +718,33 @@ final class MarginCropScanner: ObservableObject {
         completion(summary)
     }
 
+    private enum SkipStatus {
+        /// No skip decision recorded for this identifier at all.
+        case notSkipped
+        /// Skipped, and the freshly-detected margin is still essentially
+        /// the same suggestion -- stays excluded.
+        case unchanged
+        /// Skipped, but the freshly-detected margin has moved to a
+        /// materially different position -- this is a different suggestion
+        /// the user never actually saw, so it is offered again.
+        case movedFrom(MarginResult)
+    }
+
+    /// Whether `margin` matches the suggestion this photo was already
+    /// dismissed for -- see `MarginCropSkipped`'s comment. `.notSkipped`
+    /// whenever there is no recorded skip for this identifier at all.
+    private nonisolated static func skipStatus(_ margin: MarginResult, for identifier: String, width: Int, height: Int,
+                                                skippedMargins: [String: MarginResult]) -> SkipStatus {
+        guard let previous = skippedMargins[identifier] else { return .notSkipped }
+        return margin.isEssentiallySame(as: previous, width: width, height: height) ? .unchanged : .movedFrom(previous)
+    }
+
     private nonisolated static func isFresh(_ entry: MarginCropCacheEntry, for asset: PHAsset, level: Int) -> Bool {
         entry.modificationDate == asset.modificationDate
             && entry.width == asset.pixelWidth && entry.height == asset.pixelHeight
             && entry.level == level
     }
 
-    /// Whether `margin` matches the suggestion this photo was already
-    /// dismissed for -- see `MarginCropSkipped`'s comment. `false` (i.e. "not
-    /// skipped, offer it") whenever there is no recorded skip for this
-    /// identifier at all.
-    private nonisolated static func isSkipped(_ margin: MarginResult, for identifier: String, width: Int, height: Int,
-                                               skippedMargins: [String: MarginResult]) -> Bool {
-        guard let previous = skippedMargins[identifier] else { return false }
-        return margin.isEssentiallySame(as: previous, width: width, height: height)
-    }
 }
 
 /// One image handed from the Photos callback to the thread waiting on it,

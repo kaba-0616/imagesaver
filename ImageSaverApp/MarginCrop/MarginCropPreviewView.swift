@@ -190,7 +190,11 @@ struct MarginCropPreviewView: View {
             Button {
                 Task { await runSkip() }
             } label: {
-                Text("これはトリミングしない")
+                // Short enough to stay on one line at this button's width --
+                // "これはトリミングしない" wrapped to two, making this button
+                // visibly taller than "トリミングする" next to it.
+                Text("トリミングしない")
+                    .lineLimit(1)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
@@ -200,6 +204,7 @@ struct MarginCropPreviewView: View {
                 Task { await runApply() }
             } label: {
                 Text("トリミングする")
+                    .lineLimit(1)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
