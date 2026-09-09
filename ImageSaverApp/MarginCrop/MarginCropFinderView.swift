@@ -2,16 +2,18 @@ import Photos
 import SwiftUI
 import UIKit
 
-/// The margin-trim screen: scans the library for photos with a detectable
-/// uniform-color margin (letterbox/pillarbox bars, or a border on all four
-/// sides) and lets the user trim them, one at a time or in bulk. A separate
-/// page from "写真の重複を整理" on purpose -- this judges one photo at a
-/// time, not a relationship between photos, and mixing the two would make
-/// neither screen's tab picker mean anything simple.
+/// The margin-trim-candidate screen: scans the library for photos with a
+/// detectable uniform-color margin (letterbox/pillarbox bars, or a border on
+/// all four sides) and lists them for the user to browse or dismiss -- see
+/// `MarginCropScanner`'s own header comment for why this no longer performs
+/// the crop itself. A separate page from "写真の重複を整理" on purpose --
+/// this judges one photo at a time, not a relationship between photos, and
+/// mixing the two would make neither screen's tab picker mean anything
+/// simple.
 /// A snapshot of the candidates open when a card is tapped, plus which one
 /// was tapped -- lets `MarginCropPreviewView` swipe through the whole run
-/// without reflecting every scanner mutation (an applied/skipped candidate)
-/// back into the list this screen is browsing mid-swipe.
+/// without reflecting every scanner mutation (a skipped candidate) back into
+/// the list this screen is browsing mid-swipe.
 private struct PreviewTarget: Identifiable {
     let items: [MarginCropCandidate]
     let startIndex: Int
@@ -246,41 +248,34 @@ struct MarginCropFinderView: View {
     private func card(_ candidate: MarginCropCandidate) -> some View {
         let isSelected = selected.contains(candidate.id)
         let isBusy = busyIdentifiers.contains(candidate.id)
-        return VStack(spacing: 6) {
-            ZStack(alignment: .top) {
-                AssetThumbnail(identifier: candidate.localIdentifier, side: 150, generation: 0)
-                    .cornerRadius(8)
-                    .onTapGesture {
-                        let items = scanner.candidates
-                        guard let startIndex = items.firstIndex(where: { $0.id == candidate.id }) else { return }
-                        preview = PreviewTarget(items: items, startIndex: startIndex)
-                    }
-                HStack {
-                    Button { toggle(candidate) } label: {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundColor(isSelected ? .accentColor : .white)
-                            .background(Circle().fill(Color.black.opacity(0.35)))
-                    }
-                    Spacer()
-                    // "しない" used to be a second text button under the
-                    // thumbnail, easy to misread next to "トリミング" -- an
-                    // ✕ in the corner (the same idea as a dismissible card)
-                    // reads as "not this one" without needing a label at all.
-                    Button { Task { await skip(candidate) } } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title3)
-                            .foregroundColor(.white)
-                            .background(Circle().fill(Color.black.opacity(0.35)))
-                    }
+        return ZStack(alignment: .top) {
+            AssetThumbnail(identifier: candidate.localIdentifier, side: 150, generation: 0)
+                .cornerRadius(8)
+                .onTapGesture {
+                    let items = scanner.candidates
+                    guard let startIndex = items.firstIndex(where: { $0.id == candidate.id }) else { return }
+                    preview = PreviewTarget(items: items, startIndex: startIndex)
                 }
-                .padding(6)
+            HStack {
+                Button { toggle(candidate) } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundColor(isSelected ? .accentColor : .white)
+                        .background(Circle().fill(Color.black.opacity(0.35)))
+                }
+                Spacer()
+                // An ✕ in the corner (the same idea as a dismissible card)
+                // reads as "not this one" without needing a label at all.
+                Button { Task { await skip(candidate) } } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.white)
+                        .background(Circle().fill(Color.black.opacity(0.35)))
+                }
             }
-            .disabled(isBusy)
-            Button("トリミング") { Task { await apply(candidate) } }
-                .font(.caption.weight(.semibold))
-                .disabled(isBusy)
+            .padding(6)
         }
+        .disabled(isBusy)
     }
 
     private func toggle(_ candidate: MarginCropCandidate) {
@@ -300,25 +295,14 @@ struct MarginCropFinderView: View {
                     .multilineTextAlignment(.center)
             }
             undoRow
-            HStack(spacing: 12) {
-                Button {
-                    Task { await skipSelected() }
-                } label: {
-                    Text("選択した\(selected.count)枚をトリミングしない")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(selected.isEmpty)
-
-                Button {
-                    Task { await applySelected() }
-                } label: {
-                    Text("トリミング")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(selected.isEmpty)
+            Button {
+                Task { await skipSelected() }
+            } label: {
+                Text("選択した\(selected.count)枚をトリミングしない")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.bordered)
+            .disabled(selected.isEmpty)
         }
         .padding(12)
         .background(.bar)
@@ -350,47 +334,12 @@ struct MarginCropFinderView: View {
         isMutatingGrid = false
     }
 
-    func apply(_ candidate: MarginCropCandidate) async {
-        isMutatingGrid = true
-        busyIdentifiers.insert(candidate.id)
-        let outcome = await scanner.apply(candidate)
-        busyIdentifiers.remove(candidate.id)
-        selected.remove(candidate.id)
-        message = outcome.describe()
-        isMutatingGrid = false
-    }
-
     func skip(_ candidate: MarginCropCandidate) async {
         isMutatingGrid = true
         busyIdentifiers.insert(candidate.id)
         _ = await scanner.skip(candidate)
         busyIdentifiers.remove(candidate.id)
         selected.remove(candidate.id)
-        isMutatingGrid = false
-    }
-
-    private func applySelected() async {
-        isMutatingGrid = true
-        let targets = scanner.candidates.filter { selected.contains($0.id) }
-        var succeeded = 0
-        var failed = 0
-        var cancelled = 0
-        for candidate in targets {
-            switch await scanner.apply(candidate) {
-            case .done: succeeded += 1
-            case .cancelled: cancelled += 1
-            case .failed: failed += 1
-            }
-        }
-        selected.removeAll()
-        // PHPhotosErrorDomain 3303/3302 (unresolved, see plan notes) means a
-        // real bulk run can fail on some photos while succeeding on others --
-        // each failure is already logged individually by `scanner.apply`, so
-        // this summary only needs to tell the user how the run broke down,
-        // not why.
-        message = "成功\(succeeded)件 / 失敗\(failed)件"
-            + (cancelled > 0 ? " / キャンセル\(cancelled)件" : "")
-            + " (全\(targets.count)件)"
         isMutatingGrid = false
     }
 

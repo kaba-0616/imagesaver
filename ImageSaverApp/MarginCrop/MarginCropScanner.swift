@@ -1,14 +1,24 @@
-import CoreImage
-import ImageIO
 import Photos
-import UniformTypeIdentifiers
 
-/// Orchestrates the margin-trim feature: scan the whole library for photos
-/// with a detectable uniform-color margin, then apply or skip each one the
-/// user reviews. A smaller sibling of `DuplicateScanner` -- one detector
+/// Orchestrates the margin-trim-candidate feature: scan the whole library for
+/// photos with a detectable uniform-color margin and let the user browse or
+/// dismiss them. A smaller sibling of `DuplicateScanner` -- one detector
 /// instead of a grouping pass, and no cross-photo comparison at all, so the
 /// pipeline is a single straight loop rather than count → fingerprint →
 /// group.
+///
+/// This used to also *perform* the crop in place, via
+/// `PHContentEditingOutput`/`PHAssetChangeRequest`. That write path is gone:
+/// every one of 10 independent variables tried against it (Live Photo
+/// exclusion, output-format matching, three `adjustmentData` states, a retry,
+/// `canHandleAdjustmentData`, EXIF/color-profile preservation, and
+/// combinations of these) still failed with `PHPhotosErrorDomain`
+/// 3303/3302, confirmed on both a real device and Simulator with clean
+/// diagnostics and an instant (tens-of-milliseconds), deterministic
+/// rejection at the system level -- see the project plan history for the
+/// full trail. The feature is a candidate finder now: it tells the user
+/// which photos have a margin worth trimming by hand, rather than trying to
+/// commit the edit itself.
 @MainActor
 final class MarginCropScanner: ObservableObject {
 
@@ -19,15 +29,13 @@ final class MarginCropScanner: ObservableObject {
         case ready
     }
 
-    enum ApplyOutcome: Equatable {
+    enum Outcome: Equatable {
         case done
-        case cancelled
         case failed(String)
 
         func describe() -> String {
             switch self {
-            case .done: return "トリミングしました"
-            case .cancelled: return "iOSの確認でキャンセルされました"
+            case .done: return "「トリミングしない」にしました"
             case .failed(let text): return "失敗しました: \(text)"
             }
         }
@@ -126,7 +134,7 @@ final class MarginCropScanner: ObservableObject {
     /// *this exact suggestion* again -- see `MarginCropSkipped`'s own
     /// comment on why the margin, not just the identifier, is what gets
     /// recorded.
-    func skip(_ candidate: MarginCropCandidate) async -> ApplyOutcome {
+    func skip(_ candidate: MarginCropCandidate) async -> Outcome {
         guard let position = candidates.firstIndex(where: { $0.id == candidate.id }) else {
             return .failed("写真が見つかりませんでした")
         }
@@ -151,7 +159,7 @@ final class MarginCropScanner: ObservableObject {
     /// mirroring `DuplicateScanner.undoRejection()` -- restores the card at
     /// (or as close as possible to, if the list has since shrunk) the grid
     /// position it was removed from.
-    func undoSkip() async -> ApplyOutcome {
+    func undoSkip() async -> Outcome {
         guard let last = skipUndoStack.last else { return .done }
         switch await skipped.undoLast() {
         case .saved:
@@ -190,7 +198,7 @@ final class MarginCropScanner: ObservableObject {
 
     /// Settings screen: forgets every "これはトリミングしない" decision so
     /// those photos can be offered again on the next scan.
-    func clearSkipped() async -> ApplyOutcome {
+    func clearSkipped() async -> Outcome {
         switch await skipped.removeAll() {
         case .saved:
             skippedCount = 0
@@ -203,228 +211,6 @@ final class MarginCropScanner: ObservableObject {
             return .failed("記録できる上限に達しました")
         case .failed(let text):
             return .failed(text)
-        }
-    }
-
-    /// Crops in place as a Photos edit -- the original stays reachable
-    /// through the system's own "編集を戻す", the same revert story every
-    /// other photo-editing app on the device gives the user, rather than a
-    /// bespoke undo this app would have to build and maintain itself.
-    func apply(_ candidate: MarginCropCandidate) async -> ApplyOutcome {
-        // Every failure path also logs to `PhotoScanLog` -- this method is
-        // `@MainActor` already (the whole class is), so unlike
-        // `performScan`'s background-thread logging, no `Task { @MainActor
-        // in ... }` hop is needed here. Added after a real-device apply
-        // failed with nothing recorded to explain why.
-        let shortID = String(candidate.localIdentifier.prefix(8))
-        let found = PHAsset.fetchAssets(withLocalIdentifiers: [candidate.localIdentifier], options: nil)
-        guard let asset = found.firstObject else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 写真が見つかりません")
-            return .failed("写真が見つかりませんでした")
-        }
-        guard asset.canPerform(.content) else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) この写真は編集できません")
-            return .failed("この写真は編集できません")
-        }
-        // A real-device run hit PHPhotosErrorDomain code 3303
-        // (PHPhotosErrorMissingResource) from `performChanges` below, on an
-        // asset whose crop otherwise looked perfectly ordinary. That error
-        // is documented (if thinly) as Photos being unable to find a
-        // resource it expected -- Live Photos carry a paired video resource
-        // alongside the still image, which a plain JPEG
-        // `PHContentEditingOutput` does not account for. Rejecting Live
-        // Photos here up front turns an opaque Photos-internal failure into
-        // a clear, specific message, rather than waiting for the same
-        // opaque error to resurface.
-        guard !asset.mediaSubtypes.contains(.photoLive) else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) ライブフォトのため未対応")
-            return .failed("ライブフォトは現在この方法でトリミングできません")
-        }
-
-        let resources = PHAssetResource.assetResources(for: asset)
-        let resourceSummary = resources
-            .map { "\($0.type.rawValue):\($0.uniformTypeIdentifier)" }
-            .joined(separator: ",")
-
-        let inputOptions = PHContentEditingInputRequestOptions()
-        inputOptions.isNetworkAccessAllowed = true
-        // Untried surface: this defaults to rejecting every existing
-        // adjustment, which is normally fine for a plain unedited photo,
-        // but 6 other variables (Live Photo exclusion, PNG-format matching,
-        // 3 adjustmentData states) have all failed to explain 3303/3302 on
-        // otherwise-ordinary assets. If Photos considers the asset to
-        // already carry some adjustment this app cannot vouch for, it may
-        // be substituting a different (already-rendered) resource as
-        // `fullSizeImageURL` than the one it expects back at commit time --
-        // claiming this app can handle any adjustment sidesteps that
-        // substitution rather than guessing at its cause.
-        inputOptions.canHandleAdjustmentData = { _ in true }
-        var inputInfo: [AnyHashable: Any] = [:]
-        let input: PHContentEditingInput? = await withCheckedContinuation { continuation in
-            asset.requestContentEditingInput(with: inputOptions) { input, info in
-                inputInfo = info
-                continuation.resume(returning: input)
-            }
-        }
-        guard let input, let imageURL = input.fullSizeImageURL,
-              let source = CIImage(contentsOf: imageURL) else {
-            let isInCloud = inputInfo[PHContentEditingInputResultIsInCloudKey] as? Bool ?? false
-            let cancelled = inputInfo[PHContentEditingInputCancelledKey] as? Bool ?? false
-            let inputError = (inputInfo[PHContentEditingInputErrorKey] as? Error)
-                .map { "\(($0 as NSError).domain) code=\(($0 as NSError).code) \($0.localizedDescription)" }
-                ?? "なし"
-            PhotoScanLog.shared.note(
-                "トリミング失敗: \(shortID) 元画像の読み込みに失敗 "
-                + "(fullSizeImageURLあり=\(input?.fullSizeImageURL != nil) isInCloud=\(isInCloud) "
-                + "cancelled=\(cancelled) error=\(inputError))")
-            return .failed("元画像の読み込みに失敗しました")
-        }
-
-        let oriented = source.oriented(forExifOrientation: input.fullSizeImageOrientation)
-        let cropRect = candidate.cropRect
-        // `cropRect` was computed in the asset's own pixelWidth/pixelHeight
-        // space (top-left origin, Y down -- the PHAsset/UIKit convention).
-        // CIImage's coordinate space is bottom-left, Y up, so the Y origin is
-        // flipped here. Anchored on `extent.minX`/`.maxY` rather than
-        // assuming the extent starts at (0, 0): `.oriented(forExifOrientation:)`
-        // can shift the image to a non-zero origin, and measuring from a
-        // fixed origin left a strip of the original margin uncropped on one
-        // edge (or clipped into real content on the opposite one) whenever
-        // that offset was non-zero.
-        let extent = oriented.extent
-        let ciCropRect = CGRect(x: extent.minX + cropRect.minX,
-                                 y: extent.maxY - cropRect.maxY,
-                                 width: cropRect.width,
-                                 height: cropRect.height)
-        let cropped = oriented.cropped(to: ciCropRect)
-
-        guard let cgImage = CIContext().createCGImage(cropped, from: cropped.extent) else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) トリミング画像の生成に失敗")
-            return .failed("トリミング画像の生成に失敗しました")
-        }
-        // `renderedContentURL`'s file extension is chosen by Photos to match
-        // the original resource's format (confirmed on a real device: a PNG
-        // screenshot's `renderedContentURL` ends in .png) -- writing through
-        // a destination of a mismatched UTI would mismatch the file's
-        // declared format against its actual magic bytes. Matching the
-        // original UTI here is what build155 already established; JPEG
-        // remains the fallback for the rare case a resource reports no UTI.
-        let originalUTI = PHAssetResource.assetResources(for: asset).first?.uniformTypeIdentifier
-        let outputUTI = originalUTI ?? UTType.jpeg.identifier
-        // Untried variable for 3303/3302: UIImage.jpegData()/.pngData()
-        // silently re-encodes into the device's default color space and
-        // drops everything from the original's EXIF/metadata except
-        // orientation (already baked in above via `.oriented`). Every other
-        // guess so far (Live Photo exclusion, PNG-format matching,
-        // adjustmentData in 3 states, a retry) has been disproven by the
-        // same 3303/3302 recurring regardless -- this is the one surface
-        // that was never actually tested. Writing through
-        // CGImageDestination/ImageIO instead, carrying over the original
-        // resource's own metadata dictionary (EXIF, color profile such as
-        // Display P3, etc.), is a cheap, testable way to rule it in or out.
-        guard let metadataSource = CGImageSourceCreateWithURL(imageURL as CFURL, nil) else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 元画像のメタデータ読み込みに失敗")
-            return .failed("元画像のメタデータ読み込みに失敗しました")
-        }
-        let metadata = CGImageSourceCopyPropertiesAtIndex(metadataSource, 0, nil) as? [CFString: Any]
-        let output = PHContentEditingOutput(contentEditingInput: input)
-        guard let destination = CGImageDestinationCreateWithURL(output.renderedContentURL as CFURL,
-                                                                  outputUTI as CFString, 1, nil) else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 画像の書き出し先の作成に失敗")
-            return .failed("画像の書き出し先の作成に失敗しました")
-        }
-        CGImageDestinationAddImage(destination, cgImage, metadata as CFDictionary?)
-        guard CGImageDestinationFinalize(destination) else {
-            PhotoScanLog.shared.note("トリミング失敗: \(shortID) 画像の書き出しに失敗")
-            return .failed("画像の書き出しに失敗しました")
-        }
-        // 5 independent hypotheses (Live Photo, PNG-format mismatch,
-        // screenshot-specific, empty adjustmentData, a single retry) have
-        // all been disproven by this same 3303 recurring regardless -- every
-        // logged apply in this app's history has failed with it. Rather than
-        // keep guessing one variable at a time, dump every input this app
-        // actually has visibility into right before the call that fails, so
-        // the next real-device run gives something to work from instead of
-        // another blind hypothesis.
-        let attributes = try? FileManager.default.attributesOfItem(atPath: output.renderedContentURL.path)
-        let writtenSize = (attributes?[.size] as? Int) ?? -1
-        let inputAttributes = try? FileManager.default.attributesOfItem(atPath: imageURL.path)
-        let inputPathExists = FileManager.default.fileExists(atPath: imageURL.path)
-        let inputSize = (inputAttributes?[.size] as? Int) ?? -1
-        let isInCloud = inputInfo[PHContentEditingInputResultIsInCloudKey] as? Bool ?? false
-        PhotoScanLog.shared.note(
-            "トリミング診断: \(shortID) "
-            + "asset[mediaType=\(asset.mediaType.rawValue) mediaSubtypes=\(asset.mediaSubtypes.rawValue) "
-            + "sourceType=\(asset.sourceType.rawValue) pixelW=\(asset.pixelWidth) pixelH=\(asset.pixelHeight) "
-            + "isHidden=\(asset.isHidden) burst=\(asset.representsBurst) "
-            + "canContent=\(asset.canPerform(.content)) canProperties=\(asset.canPerform(.properties))] "
-            + "resources=[\(resourceSummary)] "
-            + "input[uti=\(input.uniformTypeIdentifier) orientation=\(input.fullSizeImageOrientation) "
-            + "isInCloud=\(isInCloud) fullSizeURL存在=\(inputPathExists) 元ファイルサイズ=\(inputSize)bytes "
-            + "adjustmentData=\(input.adjustmentData != nil)] "
-            + "output[url存在=\(FileManager.default.fileExists(atPath: output.renderedContentURL.path)) "
-            + "サイズ=\(writtenSize)bytes metadataあり=\(metadata != nil)]")
-        // Untried combination: adjustmentData (tried alone in build163/165,
-        // against the old UIImage.jpegData()/.pngData() writer, and only
-        // ever swapped 3303 for 3302) has never been set at the same time as
-        // the EXIF/color-profile-preserving CGImageDestination writer
-        // (build179, tried alone with adjustmentData left unset, still
-        // 3303). Every variable tried in isolation across 9 builds has
-        // failed to explain this, so the one thing left that is not a pure
-        // repeat of an already-disproven guess is this specific pairing.
-        output.adjustmentData = PHAdjustmentData(
-            formatIdentifier: "jp.kaba.imagesaverv2.margincrop",
-            formatVersion: "1.0",
-            data: Data("margin-crop".utf8))
-        return await performCropChange(asset: asset, output: output, shortID: shortID, candidateID: candidate.id, attempt: 1)
-    }
-
-    /// Split out from `apply(_:)` so a failure can retry itself: a real
-    /// device hit `PHPhotosErrorDomain` code 3303 (`PHPhotosErrorMissingResource`)
-    /// on more than one otherwise-ordinary candidate (not only Live Photos,
-    /// which are rejected earlier), and neither Apple's own documentation
-    /// nor its developer forums pin down a specific cause. One retry after
-    /// a short wait is cheap and harmless either way -- it would clear the
-    /// error if it turns out to be Photos still finishing some internal
-    /// bookkeeping shortly after the asset was created/imported, and costs
-    /// only one extra second if it is not.
-    private func performCropChange(asset: PHAsset, output: PHContentEditingOutput,
-                                    shortID: String, candidateID: String, attempt: Int) async -> ApplyOutcome {
-        do {
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest(for: asset).contentEditingOutput = output
-            }
-            candidates.removeAll { $0.id == candidateID }
-            return .done
-        } catch {
-            let nsError = error as NSError
-            if nsError.code == NSUserCancelledError {
-                PhotoScanLog.shared.note("トリミングキャンセル: \(shortID)")
-                return .cancelled
-            }
-            if nsError.domain == PHPhotosErrorDomain, nsError.code == 3303, attempt == 1 {
-                PhotoScanLog.shared.note("トリミング再試行: \(shortID) (PHPhotosErrorMissingResourceのため1秒後に再試行)")
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                return await performCropChange(asset: asset, output: output, shortID: shortID,
-                                                candidateID: candidateID, attempt: 2)
-            }
-            // The plain description alone was unhelpful for code 3303
-            // ("couldn't be completed") -- the domain/code pinned down what
-            // it actually was (PHPhotosErrorMissingResource) well before
-            // the description did. Every guessed cause so far (Live Photo,
-            // PNG mismatch, screenshot-specific, adjustmentData) has been
-            // disproven by this same error recurring regardless, so the
-            // full `userInfo` (including any `NSUnderlyingErrorKey`, which
-            // plain `.localizedDescription` never surfaces) is dumped too --
-            // there may be a more specific underlying reason in there that
-            // simply was not being looked at.
-            let underlying = (nsError.userInfo[NSUnderlyingErrorKey] as? NSError)
-                .map { "\($0.domain) code=\($0.code) \($0.localizedDescription) info=\($0.userInfo)" } ?? "なし"
-            PhotoScanLog.shared.note(
-                "トリミング失敗: \(shortID) performChanges失敗\(attempt > 1 ? "(再試行後も失敗)" : ""): "
-                + "\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription) "
-                + "userInfo=\(nsError.userInfo) underlying=[\(underlying)]")
-            return .failed(error.localizedDescription)
         }
     }
 

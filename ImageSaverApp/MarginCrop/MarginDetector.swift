@@ -14,14 +14,6 @@ struct MarginResult: Equatable, Codable {
 
     var isEmpty: Bool { top == 0 && bottom == 0 && left == 0 && right == 0 }
 
-    /// The crop this margin implies, in the same pixel coordinates as the
-    /// asset's own `pixelWidth`/`pixelHeight` (top-left origin).
-    func cropRect(width: Int, height: Int) -> CGRect {
-        CGRect(x: left, y: top,
-               width: max(1, width - left - right),
-               height: max(1, height - top - bottom))
-    }
-
     /// Whether this and `other` amount to "the same suggestion" for a photo
     /// of the given real size -- used to decide whether a margin found on a
     /// re-scan is the one the user already said "don't trim this" to, or a

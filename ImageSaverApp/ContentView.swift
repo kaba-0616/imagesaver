@@ -41,16 +41,15 @@ struct ContentView: View {
                     Text("同じ写真と似ている写真をまとめて表示します。削除するものは自分で選びます。")
                 }
 
-                // A photo edited this way keeps its place in the library --
-                // this crops in place as a Photos edit, not a delete-and-
-                // replace, so "編集を戻す" in the system Photos app is the
-                // undo story rather than anything this app has to build.
+                // A candidate finder, not an editor -- see
+                // `MarginCropScanner`'s own header comment for why this
+                // stopped short of cropping the photo itself.
                 Section {
                     NavigationLink(destination: LazyView(MarginCropFinderView())) {
                         Label("写真の余白を整理", systemImage: "crop")
                     }
                 } footer: {
-                    Text("上下・左右・四辺に単色の余白がある写真をまとめて見つけて、トリミングします。")
+                    Text("上下・左右・四辺に単色の余白がある写真をまとめて見つけます。手動でトリミングしたい写真を探す一覧としてご利用ください。")
                 }
 
                 // The extension cannot safely raise the Photos permission prompt

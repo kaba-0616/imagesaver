@@ -8,11 +8,11 @@ import SwiftUI
 /// instead of paged groups.
 ///
 /// "Before" shows the plain, unmodified photo; "after" overlays the
-/// detected margin in red on the same photo, so what would be cut is
-/// judged against the real image rather than a separately rendered local
-/// crop (`MarginCropScanner.apply` redoes the actual crop from the
-/// full-resolution original independently, through `PHContentEditingInput`,
-/// once the user confirms here).
+/// detected margin in red on the same photo, so what would be trimmed can be
+/// judged against the real image. This screen no longer performs the crop
+/// itself -- see `MarginCropScanner`'s own header comment -- it only helps
+/// decide whether a candidate belongs in the list at all ("トリミングしない"
+/// dismisses it).
 struct MarginCropPreviewView: View {
     @ObservedObject var scanner: MarginCropScanner
     let onClose: () -> Void
@@ -22,9 +22,9 @@ struct MarginCropPreviewView: View {
     /// behind this screen does not reflow mid-browse.
     @State private var pages: [MarginCropCandidate]
     @State private var index: Int
-    /// Candidates whose "トリミングする"/"これはトリミングしない" has
-    /// already been sent to the scanner but not yet actually removed from
-    /// `pages` -- see `advance(from:)`. `TabView(.page)` on iOS is known
+    /// Candidates whose "トリミングしない" has already been sent to the
+    /// scanner but not yet actually removed from `pages` -- see
+    /// `advance(from:)`. `TabView(.page)` on iOS is known
     /// (from this project's own `DuplicatePreviewView` history) to not
     /// reliably repaint a page-count change and a selection change made in
     /// the same state update, so the selection is always moved first, on
@@ -186,29 +186,15 @@ struct MarginCropPreviewView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                Task { await runSkip() }
-            } label: {
-                // Short enough to stay on one line at this button's width --
-                // "これはトリミングしない" wrapped to two, making this button
-                // visibly taller than "トリミングする" next to it.
-                Text("トリミングしない")
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(foreground)
-
-            Button {
-                Task { await runApply() }
-            } label: {
-                Text("トリミングする")
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
+        Button {
+            Task { await runSkip() }
+        } label: {
+            Text("トリミングしない")
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.bordered)
+        .tint(foreground)
         .padding(16)
         .disabled(busy || candidate == nil)
     }
@@ -221,20 +207,12 @@ struct MarginCropPreviewView: View {
         await advance(candidate, outcome: outcome)
     }
 
-    private func runApply() async {
-        guard let candidate else { return }
-        busy = true
-        let outcome = await scanner.apply(candidate)
-        busy = false
-        await advance(candidate, outcome: outcome)
-    }
-
     /// Moves off the just-processed candidate immediately (pure selection
     /// change) so the swipe view feels instant, then -- once the backend
     /// call has actually confirmed -- shrinks `pages` for real. On failure,
     /// the optimistic move is rolled back and the candidate stays put with
     /// an error toast, mirroring `DuplicatePreviewView.rejectAndAdvance`.
-    private func advance(_ candidate: MarginCropCandidate, outcome: MarginCropScanner.ApplyOutcome) async {
+    private func advance(_ candidate: MarginCropCandidate, outcome: MarginCropScanner.Outcome) async {
         guard outcome == .done else {
             toast = outcome.describe()
             return

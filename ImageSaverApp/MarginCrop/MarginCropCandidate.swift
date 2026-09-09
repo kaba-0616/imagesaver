@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 
 /// One photo this feature found a margin worth trimming on.
@@ -11,8 +10,6 @@ struct MarginCropCandidate: Identifiable, Equatable {
     let margin: MarginResult
 
     var id: String { localIdentifier }
-
-    var cropRect: CGRect { margin.cropRect(width: width, height: height) }
 
     /// "上下"/"左右"/"四辺" -- whichever edges actually carry a margin.
     var badgeLabel: String {
