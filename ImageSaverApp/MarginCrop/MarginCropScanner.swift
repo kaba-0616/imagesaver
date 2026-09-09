@@ -364,18 +364,18 @@ final class MarginCropScanner: ObservableObject {
             + "adjustmentData=\(input.adjustmentData != nil)] "
             + "output[url存在=\(FileManager.default.fileExists(atPath: output.renderedContentURL.path)) "
             + "サイズ=\(writtenSize)bytes metadataあり=\(metadata != nil)]")
-        // `adjustmentData` left unset. Every non-empty payload tried (a JSON
-        // blob in build163, a single byte in build165) failed identically
-        // with 3302 instead of 3303 -- proving adjustmentData's mere
-        // presence flips which error code Photos reports, not the root
-        // cause of the failure itself. 6 independent variables across as
-        // many builds (Live Photo exclusion, PNG-format matching, and three
-        // adjustmentData states) have now all failed to produce a single
-        // successful trim, with `NSError.userInfo` staying empty throughout
-        // -- there is nothing further to learn about this from inside the
-        // app without a device sysdiagnose/Console.app, which this Windows-
-        // only setup cannot get to. Left unset as the simplest of the three
-        // states with no observed downside.
+        // Untried combination: adjustmentData (tried alone in build163/165,
+        // against the old UIImage.jpegData()/.pngData() writer, and only
+        // ever swapped 3303 for 3302) has never been set at the same time as
+        // the EXIF/color-profile-preserving CGImageDestination writer
+        // (build179, tried alone with adjustmentData left unset, still
+        // 3303). Every variable tried in isolation across 9 builds has
+        // failed to explain this, so the one thing left that is not a pure
+        // repeat of an already-disproven guess is this specific pairing.
+        output.adjustmentData = PHAdjustmentData(
+            formatIdentifier: "jp.kaba.imagesaverv2.margincrop",
+            formatVersion: "1.0",
+            data: Data("margin-crop".utf8))
         return await performCropChange(asset: asset, output: output, shortID: shortID, candidateID: candidate.id, attempt: 1)
     }
 
