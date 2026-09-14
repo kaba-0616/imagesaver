@@ -324,11 +324,18 @@ struct ImageGridView: View {
                             Text("読み込みに失敗した画像: なし")
                         }
                     } label: {
-                        // Filled while anything is being held back, so hidden
-                        // images are discoverable without opening the menu.
-                        Image(systemName: hasHiddenImages
-                              ? "line.3.horizontal.decrease.circle.fill"
-                              : "line.3.horizontal.decrease.circle")
+                        // Plain white lines, no circle backdrop: the
+                        // ".circle.fill" variant rendered as a solid white
+                        // disc (the three bars and the disc came out the
+                        // same tint, so they blended into "one circle inside
+                        // another" instead of a legible filter glyph).
+                        // Boldening the weight is what now distinguishes
+                        // "anything hidden" from the empty state, since the
+                        // circle backdrop that used to carry that signal is
+                        // gone.
+                        Image(systemName: "line.3.horizontal.decrease")
+                            .font(hasHiddenImages ? .body.bold() : .body)
+                            .foregroundColor(.white)
                     }
                 }
             }

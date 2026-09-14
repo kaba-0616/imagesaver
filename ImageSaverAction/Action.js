@@ -51,7 +51,7 @@ Action.prototype = {
         // instead made every post by this author look like the current one.
         var POST_PATH = /(?:^|\/)(?:p|reel|reels|tv)\/([^\/?#]+)/i;
 
-        // A diary entry's own page (sakurazaka46/hinatazaka46) carries a
+        // A diary entry's own page (sakurazaka46/hinatazaka46/nogizaka46) carries a
         // widget of other members' latest entries, each a small portrait
         // thumbnail served through the same resize endpoint as this page's
         // own photos -- upgraded to full size like anything else, they fill
@@ -551,7 +551,7 @@ Action.prototype = {
             return false;
         }
 
-        var MEMBER_WIDGET_HOSTS = ["sakurazaka46.com", "hinatazaka46.com"];
+        var MEMBER_WIDGET_HOSTS = ["sakurazaka46.com", "hinatazaka46.com", "nogizaka46.com"];
 
         function hostHasMemberWidget() {
             var host = (document.location.hostname || "").toLowerCase();
