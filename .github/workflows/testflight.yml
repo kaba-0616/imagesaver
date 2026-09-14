@@ -42,7 +42,10 @@ jobs:
           CERT_PATH="$RUNNER_TEMP/distribution.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
 
-          echo -n "$DISTRIBUTION_CERTIFICATE_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+          # macOS ships BSD base64, not GNU coreutils -- it takes -D, not
+          # the GNU-only --decode (which BSD base64 silently mistakes for a
+          # positional filename argument instead of rejecting outright).
+          echo -n "$DISTRIBUTION_CERTIFICATE_P12_BASE64" | base64 -D -o "$CERT_PATH"
 
           # A fresh, throwaway keychain -- avoids polluting (or depending on
           # the state of) the runner's default login keychain, which GitHub's
@@ -62,7 +65,7 @@ jobs:
             local base64_content="$1"
             local out_name="$2"
             local profile_path="$RUNNER_TEMP/$out_name.mobileprovision"
-            echo -n "$base64_content" | base64 --decode -o "$profile_path"
+            echo -n "$base64_content" | base64 -D -o "$profile_path"
             local uuid
             uuid=$(security cms -D -i "$profile_path" | plutil -extract UUID xml1 -o - - | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
             cp "$profile_path" "$PROFILES_DIR/$uuid.mobileprovision"
@@ -141,7 +144,7 @@ jobs:
         run: |
           set -e
           mkdir -p ~/.appstoreconnect/private_keys
-          echo -n "$APPSTORE_API_KEY_P8_BASE64" | base64 --decode \
+          echo -n "$APPSTORE_API_KEY_P8_BASE64" | base64 -D \
             -o ~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8
 
           IPA_PATH=$(find build/export -name "*.ipa" | head -n 1)
