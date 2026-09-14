@@ -128,7 +128,7 @@ struct ContentView: View {
                 // Bottom of the list, not top: this screen's job is the
                 // usage instructions and the two tools, not the ad.
                 Section {
-                    AdBannerView()
+                    AdBannerView(.top)
                         .frame(height: 50)
                         .listRowInsets(EdgeInsets())
                 }

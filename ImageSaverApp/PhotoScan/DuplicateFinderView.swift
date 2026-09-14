@@ -314,6 +314,8 @@ struct DuplicateFinderView: View {
                     limitedNotice.padding(.horizontal, 16).padding(.bottom, 4)
                 }
                 list
+                AdBannerView(.duplicateFinder)
+                    .frame(height: 50)
                 bottomBar
             }
             // A regroup started from the results screen used to run behind a

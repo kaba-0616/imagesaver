@@ -1,24 +1,39 @@
 import SwiftUI
 import GoogleMobileAds
 
-/// A standard banner. Kept to a single reusable view so there is exactly one
-/// place to swap the test ad unit ID for a real one later, rather than a
-/// string duplicated at every call site.
+/// A standard banner. One ad unit per placement (so AdMob's reporting can
+/// tell them apart) -- see `AdUnit` below for the actual IDs.
 struct AdBannerView: UIViewRepresentable {
-    // Google's official test banner unit -- always serves a clearly-labelled
-    // test creative, safe to ship. Swap for a real ad unit ID once AdMob
-    // account setup exists; see docs/monetization-todo.md.
-    private static let testAdUnitID = "ca-app-pub-3940256099942544/2934735716"
+    let adUnitID: String
+
+    init(_ placement: AdUnit) {
+        self.adUnitID = placement.id
+    }
 
     func makeUIView(context: Context) -> BannerView {
         let banner = BannerView(adSize: AdSizeBanner)
-        banner.adUnitID = Self.testAdUnitID
+        banner.adUnitID = adUnitID
         banner.rootViewController = context.environment.uiRootViewController
         banner.load(Request())
         return banner
     }
 
     func updateUIView(_ uiView: BannerView, context: Context) {}
+}
+
+/// The real, AdMob-issued banner units for this app's three placements.
+enum AdUnit {
+    case top
+    case duplicateFinder
+    case marginCrop
+
+    var id: String {
+        switch self {
+        case .top: return "ca-app-pub-1034383442757151/4861932057"
+        case .duplicateFinder: return "ca-app-pub-1034383442757151/9922687045"
+        case .marginCrop: return "ca-app-pub-1034383442757151/4909646477"
+        }
+    }
 }
 
 /// SwiftUI has no built-in way to hand a UIViewController to a

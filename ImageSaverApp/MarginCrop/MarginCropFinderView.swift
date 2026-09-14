@@ -213,6 +213,8 @@ struct MarginCropFinderView: View {
             } else {
                 VStack(spacing: 0) {
                     grid
+                    AdBannerView(.marginCrop)
+                        .frame(height: 50)
                     bottomBar
                 }
             }
