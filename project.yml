@@ -48,6 +48,11 @@ targets:
         # default to 1.0/1 no matter what the build settings say.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # This app only ever talks HTTPS (standard OS-provided TLS) and
+        # implements no encryption of its own, so it's exempt -- declaring
+        # that here is what skips App Store Connect's "アプリの暗号化書類"
+        # questionnaire on every future TestFlight/App Store submission.
+        ITSAppUsesNonExemptEncryption: false
         NSPhotoLibraryAddUsageDescription: "選択した画像をカメラロールに保存するために使用します。"
         # Only the container app reads the library, and only for the
         # duplicate finder. The extension never asks for this level, so
@@ -68,7 +73,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2
         MARKETING_VERSION: "3.2.0"
-        CURRENT_PROJECT_VERSION: "184"
+        CURRENT_PROJECT_VERSION: "185"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageSaver AppStore"
     dependencies:
@@ -109,7 +114,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2.action
         MARKETING_VERSION: "3.2.0"
-        CURRENT_PROJECT_VERSION: "184"
+        CURRENT_PROJECT_VERSION: "185"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SKIP_INSTALL: true
         PROVISIONING_PROFILE_SPECIFIER: "ImageSaverAction AppStore"
