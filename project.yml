@@ -37,9 +37,10 @@ packages:
   GoogleMobileAds:
     url: https://github.com/googleads/swift-package-manager-google-mobile-ads.git
     # Google's own docs recommend "up to next major" here rather than
-    # pinning an exact patch (unlike SwiftDraw above); minVersion alone
-    # gets XcodeGen/SPM to do that.
-    minVersion: 13.0.0
+    # pinning an exact patch (unlike SwiftDraw above); XcodeGen's `from`
+    # is what maps to SwiftPM's .upToNextMajor(from:) -- a bare
+    # `minVersion` isn't a requirement XcodeGen recognizes on its own.
+    from: 13.0.0
 
 targets:
   ImageSaverApp:
@@ -94,7 +95,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2
         MARKETING_VERSION: "3.2.0"
-        CURRENT_PROJECT_VERSION: "186"
+        CURRENT_PROJECT_VERSION: "187"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageSaver AppStore"
     dependencies:
@@ -136,7 +137,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2.action
         MARKETING_VERSION: "3.2.0"
-        CURRENT_PROJECT_VERSION: "186"
+        CURRENT_PROJECT_VERSION: "187"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SKIP_INSTALL: true
         PROVISIONING_PROFILE_SPECIFIER: "ImageSaverAction AppStore"
