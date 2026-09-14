@@ -78,14 +78,25 @@ jobs:
         run: |
           mkdir -p build
           set -o pipefail
+          # Command-line build settings override project.yml/xcodeproj ones
+          # outright -- passing signing identity/team/style here directly
+          # sidesteps an Xcode quirk where a per-SDK default
+          # (CODE_SIGN_IDENTITY[sdk=iphoneos*]) can silently shadow the
+          # generic CODE_SIGN_IDENTITY set in project.yml, leaving archive
+          # looking for an "iOS Development" cert instead of a distribution one.
           xcodebuild archive \
             -project ImageSaver.xcodeproj \
             -scheme ImageSaverApp \
             -configuration Release \
             -archivePath build/ImageSaver.xcarchive \
             -destination "generic/platform=iOS" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             ONLY_ACTIVE_ARCH=NO \
             2>&1 | tee build/xcodebuild.log
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Show compile errors (on failure)
         if: failure()
