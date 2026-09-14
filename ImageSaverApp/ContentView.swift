@@ -10,6 +10,8 @@ struct ContentView: View {
     // makes the user sit through again. One prompt, covering both, is what
     // this screen asks for now.
     @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    @StateObject private var subscriptions = SubscriptionManager.shared
+    @State private var restoreMessage: String?
 
     var body: some View {
         NavigationView {
@@ -91,10 +93,53 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+
+                // App Review requires a way to restore a subscription
+                // without repurchasing (Guideline 3.1.1) -- there is no
+                // paywall to put this next to yet, so it lives here until
+                // one exists.
+                Section {
+                    HStack {
+                        Text("購入状況")
+                        Spacer()
+                        Text(subscriptions.isSubscribed ? "有効" : "未購入")
+                            .foregroundColor(.secondary)
+                    }
+                    Button("購入を復元") {
+                        Task {
+                            do {
+                                try await subscriptions.restorePurchases()
+                                restoreMessage = subscriptions.isSubscribed
+                                    ? "復元しました" : "復元できる購入が見つかりませんでした"
+                            } catch {
+                                restoreMessage = "復元に失敗しました: \(error.localizedDescription)"
+                            }
+                        }
+                    }
+                    if let restoreMessage {
+                        Text(restoreMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } footer: {
+                    Text("課金内容は現在準備中です。")
+                }
+
+                // Bottom of the list, not top: this screen's job is the
+                // usage instructions and the two tools, not the ad.
+                Section {
+                    AdBannerView()
+                        .frame(height: 50)
+                        .listRowInsets(EdgeInsets())
+                }
             }
             .navigationTitle("ImageSaver")
             .onAppear {
                 photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                AdsManager.shared.start()
+                Task {
+                    await subscriptions.loadProducts()
+                }
             }
         }
     }

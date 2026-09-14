@@ -1,0 +1,44 @@
+{
+  "identifier" : "5A6C3B0E-6E6E-4F5C-9C1A-3F0E5F2C7A11",
+  "nonRenewingSubscriptions" : [],
+  "products" : [],
+  "settings" : {
+    "_locale" : "ja_JP",
+    "_storefront" : "JPN"
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21000001",
+      "localizations" : [],
+      "name" : "ImageSaver Plus",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "480",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "21000001001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "広告非表示など (プレースホルダ、本番の内容は未確定)",
+              "displayName" : "ImageSaver Plus (月額)",
+              "locale" : "ja_JP"
+            }
+          ],
+          "productID" : "jp.kaba.imagesaverv2.subscription.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Monthly (placeholder)",
+          "subscriptionGroupID" : "21000001",
+          "taxCategory" : "kTaxCategoryDefault",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
