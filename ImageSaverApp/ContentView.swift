@@ -1,37 +1,11 @@
 import SwiftUI
-import Photos
 
 struct ContentView: View {
-    // .readWrite, not .addOnly: the duplicate finder below needs full access
-    // regardless, and asking for .addOnly here first used to mean two
-    // separate permission prompts (add-only now, then a second upgrade to
-    // full access the first time "写真の重複を整理" is opened) -- each an
-    // extra round trip that a sideloaded free-signed build's every reinstall
-    // makes the user sit through again. One prompt, covering both, is what
-    // this screen asks for now.
-    @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-    @StateObject private var subscriptions = SubscriptionManager.shared
-    @State private var restoreMessage: String?
+    @ObservedObject private var subscriptions = SubscriptionManager.shared
 
     var body: some View {
         NavigationView {
             List {
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("使い方")
-                            .font(.headline)
-                        Text("1. Safariで画像を保存したいページを開く")
-                        Text("2. 共有ボタンをタップし「ImageSaver」を選択")
-                        Text("3. 一覧から画像を選んで保存")
-                    }
-                    .font(.subheadline)
-                    .padding(.vertical, 4)
-
-                    NavigationLink(destination: EnableExtensionGuideView()) {
-                        Label("機能拡張が表示されない場合", systemImage: "questionmark.circle")
-                    }
-                }
-
                 // Saving the same picture twice is what this app does when you
                 // share a page you have shared before, so the duplicates it
                 // creates are its own to clean up.
@@ -54,85 +28,20 @@ struct ContentView: View {
                     Text("上下・左右・四辺に単色の余白がある写真をまとめて見つけます。手動でトリミングしたい写真を探す一覧としてご利用ください。")
                 }
 
-                // The extension cannot safely raise the Photos permission prompt
-                // itself, so it has to be granted here first.
+                // Usage instructions, Photos permission, version, and
+                // purchase status all live in here now -- this screen's job
+                // is just the two tools plus a way to reach the rest.
                 Section {
-                    HStack {
-                        Label("写真へのアクセス", systemImage: statusIcon)
-                            .foregroundColor(statusColor)
-                        Spacer()
-                        Text(statusText)
-                            .foregroundColor(.secondary)
-                    }
-
-                    if photoStatus == .notDetermined {
-                        Button("写真へのアクセスを許可する") {
-                            Task {
-                                photoStatus = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-                            }
-                        }
-                    } else if photoStatus == .denied || photoStatus == .restricted {
-                        Button("設定アプリを開く") {
-                            if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
-                            }
-                        }
-                    }
-                } header: {
-                    Text("必要な許可")
-                } footer: {
-                    Text("共有シートから保存する前と、「写真の重複を整理」を使う前、両方でここでの許可が必要です。1回の許可でどちらにも使えます。")
-                }
-
-                Section("バージョン") {
-                    HStack {
-                        Text("インストール中のビルド")
-                        Spacer()
-                        Text(AppVersion.short)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
+                    NavigationLink(destination: SettingsView()) {
+                        Label("設定", systemImage: "gearshape")
                     }
                 }
 
-                // App Review requires a way to restore a subscription
-                // without repurchasing (Guideline 3.1.1) -- there is no
-                // paywall to put this next to yet, so it lives here until
-                // one exists.
-                Section {
-                    HStack {
-                        Text("購入状況")
-                        Spacer()
-                        Text(subscriptionStatusText)
-                            .foregroundColor(.secondary)
-                    }
-                    NavigationLink("プランを見る") {
-                        PaywallView()
-                    }
-                    Button("購入を復元") {
-                        Task {
-                            do {
-                                try await subscriptions.restorePurchases()
-                                restoreMessage = subscriptions.isSubscribed
-                                    ? "復元しました" : "復元できる購入が見つかりませんでした"
-                            } catch {
-                                restoreMessage = "復元に失敗しました: \(error.localizedDescription)"
-                            }
-                        }
-                    }
-                    if let restoreMessage {
-                        Text(restoreMessage)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                } footer: {
-                    Text("Lite: 広告非表示 / Full: 広告非表示+削除回数無制限。購入画面は準備中です。")
-                }
-
-                // Bottom of the list, not top: this screen's job is the
-                // usage instructions and the two tools, not the ad. Hidden
-                // entirely (not just skipped) once either plan is active --
-                // AdBannerView would otherwise still spend a request/fill on
-                // an ad nobody paid to avoid seeing.
+                // Bottom of the list, not top: this screen's job is the two
+                // tools, not the ad. Hidden entirely (not just skipped) once
+                // either plan is active -- AdBannerView would otherwise
+                // still spend a request/fill on an ad nobody paid to avoid
+                // seeing.
                 if !subscriptions.isAdsRemoved {
                     Section {
                         AdBannerView(.top)
@@ -143,45 +52,8 @@ struct ContentView: View {
             }
             .navigationTitle("ImageSaver")
             .onAppear {
-                photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
                 AdsManager.shared.start()
-                Task {
-                    await subscriptions.loadProducts()
-                }
             }
-        }
-    }
-
-    private var subscriptionStatusText: String {
-        switch subscriptions.tier {
-        case .full: return "Full 有効"
-        case .lite: return "Lite 有効"
-        case nil: return "未購入"
-        }
-    }
-
-    private var statusText: String {
-        switch photoStatus {
-        case .authorized: return "許可済み"
-        case .limited: return "一部のみ許可"
-        case .denied: return "拒否"
-        case .restricted: return "制限あり"
-        case .notDetermined: return "未設定"
-        @unknown default: return "不明"
-        }
-    }
-
-    private var statusIcon: String {
-        switch photoStatus {
-        case .authorized, .limited: return "checkmark.circle.fill"
-        default: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var statusColor: Color {
-        switch photoStatus {
-        case .authorized, .limited: return .green
-        default: return .orange
         }
     }
 }
@@ -198,15 +70,6 @@ private struct LazyView<Content: View>: View {
     private let build: () -> Content
     init(_ build: @autoclosure @escaping () -> Content) { self.build = build }
     var body: Content { build() }
-}
-
-private struct EnableExtensionGuideView: View {
-    var body: some View {
-        List {
-            Text("ImageSaverはSafariの共有シートの「アクション」として動作します。共有ボタンをタップし、アイコンが並んだ列を左端までスワイプして「その他」をタップ、「アクションを編集」でImageSaverをオンにしてください。設定アプリではなく、Safariの共有シートの中に設定箇所があります。")
-        }
-        .navigationTitle("機能拡張の有効化")
-    }
 }
 
 #Preview {

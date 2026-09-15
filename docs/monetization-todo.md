@@ -9,9 +9,13 @@
 - AdMobアカウント作成済み。アプリID・3箇所ぶんの広告ユニットIDも発行済みで、
   `project.yml`(`GADApplicationIdentifier`)と`AdBannerView.swift`
   (`AdUnit` enum)に実際の値を反映済み(build188〜)。テストIDは残っていない。
-- 掲出箇所はTOP画面・重複整理画面・余白整理画面の3箇所、それぞれ専用の
-  広告ユニットで実装済み(`ContentView`/`DuplicateFinderView`/
-  `MarginCropFinderView`、いずれもリスト下部にバナー1枠)。
+- 掲出箇所はTOP画面・重複整理画面・余白整理画面・設定画面の4箇所、それぞれ
+  専用の広告ユニットで実装済み(`ContentView`/`DuplicateFinderView`/
+  `MarginCropFinderView`/`SettingsView`、いずれもリスト下部にバナー1枠)。
+- **残タスク:** 設定画面用の広告ユニット(`AdUnit.settings`)はまだ
+  Googleのテストバナー用プレースホルダIDのまま(2026-09-15、build194〜)。
+  AdMobで「設定画面バナー」という名前でバナーユニットを新規作成し、
+  発行されたIDを`AdBannerView.swift`の`AdUnit.settings`に反映すること。
 - 機密カテゴリ(性描写への言及・性と生殖に関する健康・出会い系・水着)は
   AdMob管理画面の「ブロック管理」からブロック設定済み。
 - **SKAdNetworkItems完全一覧、追加済み(2026-09-15、build192〜)。**
