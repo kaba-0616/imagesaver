@@ -139,6 +139,16 @@ struct DuplicateFinderView: View {
                     .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
             }
+            // The regroup scrim (a plain in-body ZStack overlay) can't reach
+            // above the navigation bar -- that's UIKit chrome the SwiftUI
+            // view tree doesn't contain, which is why the toolbar buttons'
+            // .opacity(0.3) dimming above still read as "floating on top of"
+            // the darkened list instead of part of the same blocked layer.
+            // Tinting the bar itself the same dark color during a regroup
+            // makes the two look like one continuous scrim.
+            .toolbarBackground(scanner.regrouping != nil ? Color.black.opacity(0.5) : Color.clear,
+                                for: .navigationBar)
+            .toolbarBackground(scanner.regrouping != nil ? .visible : .automatic, for: .navigationBar)
             .fullScreenCover(item: $preview) { target in
                 DuplicatePreviewView(scanner: scanner,
                                      groups: target.groups,
