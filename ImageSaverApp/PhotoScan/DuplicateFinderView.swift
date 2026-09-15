@@ -41,6 +41,17 @@ struct DuplicateFinderView: View {
     /// they were showing is untouched, and the bulk actions still work.
     @State private var showsCheckboxes = true
 
+    /// Screenshot-taking aid, same toggle as ads (`devForceHideAds`) --
+    /// the log button/sheet is dev-facing and has no business showing up
+    /// in an App Store screenshot either.
+    private var hideDevOnlyExtras: Bool {
+        #if IMAGESAVER_DEV_TOOLS
+        return subscriptions.devForceHideAds
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         content
             .navigationTitle("写真の重複を整理")
@@ -120,16 +131,18 @@ struct DuplicateFinderView: View {
                     .disabled(scanner.regrouping != nil)
                     .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    // Reachable regardless of phase: the footer copy of this
-                    // button only exists once results are on screen, and
-                    // nothing at all was reachable while counting, scanning
-                    // or grouping.
-                    Button { showingLog = true } label: {
-                        Image(systemName: "doc.text")
+                if !hideDevOnlyExtras {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        // Reachable regardless of phase: the footer copy of
+                        // this button only exists once results are on
+                        // screen, and nothing at all was reachable while
+                        // counting, scanning or grouping.
+                        Button { showingLog = true } label: {
+                            Image(systemName: "doc.text")
+                        }
+                        .disabled(scanner.regrouping != nil)
+                        .opacity(scanner.regrouping != nil ? 0.3 : 1)
                     }
-                    .disabled(scanner.regrouping != nil)
-                    .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
@@ -241,7 +254,9 @@ struct DuplicateFinderView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            logRow
+            if !hideDevOnlyExtras {
+                logRow
+            }
         }
         .padding(32)
     }

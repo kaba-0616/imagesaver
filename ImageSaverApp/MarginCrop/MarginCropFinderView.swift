@@ -41,6 +41,17 @@ struct MarginCropFinderView: View {
     @State private var showingLog = false
     @State private var isComputingLevelCounts = false
 
+    /// Screenshot-taking aid, same toggle as ads (`devForceHideAds`) --
+    /// the log button/sheet is dev-facing and has no business showing up
+    /// in an App Store screenshot either.
+    private var hideDevOnlyExtras: Bool {
+        #if IMAGESAVER_DEV_TOOLS
+        return subscriptions.devForceHideAds
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         content
             .navigationTitle("写真の余白を整理")
@@ -98,10 +109,12 @@ struct MarginCropFinderView: View {
                     }
                     .disabled(scanner.skippedCount == 0)
                 }
-                Section {
-                    Button("ログ") {
-                        showingSettings = false
-                        showingLog = true
+                if !hideDevOnlyExtras {
+                    Section {
+                        Button("ログ") {
+                            showingSettings = false
+                            showingLog = true
+                        }
                     }
                 }
                 Section {
