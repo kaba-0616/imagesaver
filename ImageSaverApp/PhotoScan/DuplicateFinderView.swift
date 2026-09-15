@@ -323,28 +323,39 @@ struct DuplicateFinderView: View {
     // MARK: - Results
 
     private var results: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                tabPicker
-                if scanner.access == .limited {
-                    limitedNotice.padding(.horizontal, 16).padding(.bottom, 4)
-                }
-                list
-                if !subscriptions.isAdsRemoved {
-                    AdBannerView(.duplicateFinder)
-                        .frame(height: 50)
-                }
-                bottomBar
+        VStack(spacing: 0) {
+            tabPicker
+            if scanner.access == .limited {
+                limitedNotice.padding(.horizontal, 16).padding(.bottom, 4)
             }
-            // A regroup started from the results screen used to run behind a
-            // thin bar over the list, leaving "≠" and every other control
-            // live underneath it -- pressing one mid-regroup could act on a
-            // group the new grouping was about to reshuffle out from under
-            // it. A full scrim blocks input the same way the initial
-            // scan/count/group phases already do.
-            if let state = scanner.regrouping {
-                regroupOverlay(state)
+            list
+            if !subscriptions.isAdsRemoved {
+                AdBannerView(.duplicateFinder)
+                    .frame(height: 50)
             }
+            bottomBar
+        }
+        // A regroup started from the results screen used to run behind a
+        // thin bar over the list, leaving "≠" and every other control live
+        // underneath it -- pressing one mid-regroup could act on a group the
+        // new grouping was about to reshuffle out from under it. A full
+        // scrim blocks input the same way the initial scan/count/group
+        // phases already do.
+        //
+        // This used to be a plain in-body ZStack overlay, but that can't
+        // reach the navigation bar -- that's UIKit chrome outside the
+        // SwiftUI view tree it sits in -- so the toolbar's own buttons
+        // (dimmed individually via their own .opacity(0.3)) still read as
+        // floating on top of the dimmed list instead of part of the same
+        // blocked layer. A `.fullScreenCover` is a separate, fully-covering
+        // presentation and doesn't have that gap. It's applied here on
+        // `results` rather than up on the `.toolbar` chain itself --
+        // `.toolbarBackground` tried there previously made the type checker
+        // blame an unrelated `.toolbar` call with "ambiguous use of
+        // toolbar(content:)", so this sidesteps that chain entirely instead
+        // of fighting it.
+        .fullScreenCover(isPresented: Binding(get: { scanner.regrouping != nil }, set: { _ in })) {
+            regroupModal
         }
         // `.confirmationDialog` (backed by UIAlertController's .actionSheet
         // style) used to be here, but on this screen it reliably rendered as
@@ -385,6 +396,23 @@ struct DuplicateFinderView: View {
             return
         }
         confirmingDelete = true
+    }
+
+    /// Content for the `.fullScreenCover` in `results`. Reads `scanner.
+    /// regrouping` live (rather than capturing the state that was current
+    /// when the cover was presented) so the progress bar keeps updating
+    /// while it's up; the `nil` branch only shows during the cover's own
+    /// dismiss animation, after `regrouping` has already gone back to nil.
+    @ViewBuilder
+    private var regroupModal: some View {
+        Group {
+            if let state = scanner.regrouping {
+                regroupOverlay(state)
+            } else {
+                Color.clear
+            }
+        }
+        .modifier(ClearFullScreenCoverBackground())
     }
 
     @ViewBuilder
@@ -820,4 +848,20 @@ private struct PreviewTarget: Identifiable {
     let groups: [DuplicateGroup]
     let startGroupIndex: Int
     let startMemberIndex: Int
+}
+
+/// `.presentationBackground(.clear)` only exists from iOS 16.4, but this
+/// project's deployment target is 16.0. Without it, a `.fullScreenCover`'s
+/// own opaque system background would flash briefly during the presentation
+/// transition, before the scrim's own `Color.black.opacity(0.5)` finishes
+/// covering the screen -- harmless, so pre-16.4 devices just keep that
+/// flash instead of losing the cover-based fix entirely.
+private struct ClearFullScreenCoverBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content.presentationBackground(.clear)
+        } else {
+            content
+        }
+    }
 }
