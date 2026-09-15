@@ -68,6 +68,14 @@ struct SettingsView: View {
                 }
             }
 
+            #if IMAGESAVER_DEV_TOOLS
+            Section {
+                Toggle("広告を非表示(開発用)", isOn: $subscriptions.devForceHideAds)
+            } footer: {
+                Text("App Storeのスクリーンショット撮影用。サブスクリプションを実際に購入せずに広告枠だけ隠せます。")
+            }
+            #endif
+
             // App Review requires a way to restore a subscription without
             // repurchasing (Guideline 3.1.1).
             Section {

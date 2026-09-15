@@ -39,6 +39,23 @@ final class SubscriptionManager: ObservableObject {
 
     @Published private(set) var tier: SubscriptionTier?
     @Published private(set) var products: [Product] = []
+
+    #if IMAGESAVER_DEV_TOOLS
+    /// Screenshot-taking aid only -- lets ads be hidden for App Store
+    /// screenshots without a working subscription purchase (subscriptions
+    /// can't be exercised in TestFlight until the app has been submitted
+    /// for review at least once; see docs/monetization-todo.md). Persisted
+    /// so it survives relaunches while shooting a batch of screenshots.
+    /// `IMAGESAVER_DEV_TOOLS` is on in every build this project ships (see
+    /// project.yml), same as the existing "全レベル照合(開発用)" button, so
+    /// this reaches real devices but never gates behind a separate flag a
+    /// reviewer could stumble into by accident -- it only ever hides ads,
+    /// never grants `isUnlimitedDeletes` or anything else a paying
+    /// subscriber gets.
+    @Published var devForceHideAds = UserDefaults.standard.bool(forKey: "dev.forceHideAds") {
+        didSet { UserDefaults.standard.set(devForceHideAds, forKey: "dev.forceHideAds") }
+    }
+    #endif
     /// `products.isEmpty` alone can't tell "still fetching" apart from "the
     /// fetch already finished and came back empty/errored" -- the paywall
     /// showed "読み込んでいます…" forever in both cases until this was added,
@@ -48,7 +65,12 @@ final class SubscriptionManager: ObservableObject {
     @Published private(set) var loadError: String?
 
     /// Ads are hidden on both plans.
-    var isAdsRemoved: Bool { tier != nil }
+    var isAdsRemoved: Bool {
+        #if IMAGESAVER_DEV_TOOLS
+        if devForceHideAds { return true }
+        #endif
+        return tier != nil
+    }
     /// Only the higher plan bypasses `ActionQuota`.
     var isUnlimitedDeletes: Bool { tier == .full }
     /// Kept for the existing "購入状況" row and Restore Purchases flow, which
