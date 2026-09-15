@@ -97,6 +97,12 @@ struct DuplicateFinderView: View {
                     // queue a second full grouping behind the first on the
                     // same serial queue.
                     .disabled(scanner.phase != .ready || scanner.regrouping != nil)
+                    // `.disabled` alone stops the tap but leaves the icon at
+                    // full opacity, so it still *reads* as live above the
+                    // scrim that dims everything else on screen during a
+                    // regroup -- matching that dimming here is what actually
+                    // makes it look like part of the same blocked state.
+                    .opacity(scanner.regrouping != nil ? 0.3 : 1)
                     .popover(isPresented: $showingLevelPicker) {
                         levelPicker
                     }
@@ -112,6 +118,7 @@ struct DuplicateFinderView: View {
                     // on purpose, and it is not one of these (it is the
                     // system back button, outside this toolbar entirely).
                     .disabled(scanner.regrouping != nil)
+                    .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     // Reachable regardless of phase: the footer copy of this
@@ -122,12 +129,14 @@ struct DuplicateFinderView: View {
                         Image(systemName: "doc.text")
                     }
                     .disabled(scanner.regrouping != nil)
+                    .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
                         Image(systemName: "gearshape")
                     }
                     .disabled(scanner.regrouping != nil)
+                    .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
             }
             .fullScreenCover(item: $preview) { target in
@@ -347,6 +356,14 @@ struct DuplicateFinderView: View {
         } message: {
             Text("「最近削除した項目」に30日残ります。iCloud写真がオンの場合は他の端末からも消えます。")
         }
+        // This screen also has a `.popover` (the level picker, on the reload
+        // toolbar button). With both a popover and a confirmationDialog in
+        // the same view hierarchy, iOS has a known bug where the dialog
+        // picks up popover-style (a callout with an arrow) instead of the
+        // bottom sheet it should use on iPhone -- forcing sheet adaptation
+        // here is what actually fixes it rather than working around the
+        // popover itself.
+        .modifier(SheetAdaptationIfAvailable())
         .alert("本日の削除可能数を使い切りました", isPresented: $showingQuotaAlert) {
             if rewardedAd.isReady {
                 Button("広告を見て+\(ActionQuota.rewardedAdBonus)回") {
@@ -803,4 +820,18 @@ private struct PreviewTarget: Identifiable {
     let groups: [DuplicateGroup]
     let startGroupIndex: Int
     let startMemberIndex: Int
+}
+
+/// `.presentationCompactAdaptation(.sheet)` only exists from iOS 16.4, but
+/// this project's deployment target is 15.0 -- gating it behind
+/// `#available` here (rather than raising the target) keeps it a no-op on
+/// older OSes instead of a build error.
+private struct SheetAdaptationIfAvailable: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content.presentationCompactAdaptation(.sheet)
+        } else {
+            content
+        }
+    }
 }
