@@ -50,6 +50,13 @@ struct DuplicatePreviewView: View {
     /// limit, a failed write) has nowhere else to surface on this fullscreen
     /// screen, so it gets this instead of the grid's inline message text.
     @State private var toast: String?
+    /// Tapping the photo (once, not the existing double-tap-to-reset-zoom)
+    /// toggles this, hiding the top bar, filmstrip and bottom bar so the
+    /// photo itself fills the screen -- the same "tap to hide chrome"
+    /// convention the system Photos app uses. Persists across a swipe on
+    /// purpose: browsing several photos in a row with the chrome out of the
+    /// way is the point, not something to undo on every page change.
+    @State private var chromeHidden = false
     /// Groups hidden from the filmstrip the instant "≠" is pressed, before
     /// `scanner.reject` has even been asked -- `pages` (what the pager's
     /// page count is derived from) deliberately does not consult this, so
@@ -138,7 +145,10 @@ struct DuplicatePreviewView: View {
                 filmstrip
                 bottomBar
             }
-            .opacity(dismissOpacity)
+            .opacity(chromeHidden ? 0 : dismissOpacity)
+            // Otherwise the (invisible but still laid out) bars would keep
+            // eating taps/swipes meant for the photo underneath them.
+            .allowsHitTesting(!chromeHidden)
         }
         .simultaneousGesture(dismissDrag)
         .onAppear {
@@ -297,6 +307,16 @@ struct DuplicatePreviewView: View {
                         lastScale = 1
                         panOffset = .zero
                         lastPanOffset = .zero
+                    }
+                }
+                // Declared after the double-tap gesture above (not before):
+                // that ordering is what makes SwiftUI's tap-count
+                // recognizers require the double-tap to fail before this
+                // single-tap fires, instead of both firing on every
+                // double-tap.
+                .onTapGesture(count: 1) {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        chromeHidden.toggle()
                     }
                 }
         } else if let failure = loader.failure {
