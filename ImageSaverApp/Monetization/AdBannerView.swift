@@ -33,9 +33,7 @@ enum AdUnit {
         case .top: return "ca-app-pub-1034383442757151/4861932057"
         case .duplicateFinder: return "ca-app-pub-1034383442757151/9922687045"
         case .marginCrop: return "ca-app-pub-1034383442757151/4909646477"
-        // TODO(monetization-todo.md): placeholder (Google's test banner
-        // unit) until the real "設定画面バナー" unit ID is created in AdMob.
-        case .settings: return "ca-app-pub-3940256099942544/2934735716"
+        case .settings: return "ca-app-pub-1034383442757151/8802759648"
         }
     }
 }
