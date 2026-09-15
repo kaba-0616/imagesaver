@@ -41,17 +41,6 @@ struct DuplicateFinderView: View {
     /// they were showing is untouched, and the bulk actions still work.
     @State private var showsCheckboxes = true
 
-    /// Split out of the `.toolbarBackground` call site below -- inlining
-    /// this ternary into the already-long modifier chain made the type
-    /// checker blame an unrelated `.toolbar` further up with "ambiguous
-    /// use of toolbar(content:)" instead of pointing at the real spot.
-    private var regroupBarBackground: Color {
-        scanner.regrouping != nil ? Color.black.opacity(0.5) : Color.clear
-    }
-    private var regroupBarVisibility: Visibility {
-        scanner.regrouping != nil ? .visible : .automatic
-    }
-
     var body: some View {
         content
             .navigationTitle("写真の重複を整理")
@@ -150,15 +139,6 @@ struct DuplicateFinderView: View {
                     .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
             }
-            // The regroup scrim (a plain in-body ZStack overlay) can't reach
-            // above the navigation bar -- that's UIKit chrome the SwiftUI
-            // view tree doesn't contain, which is why the toolbar buttons'
-            // .opacity(0.3) dimming above still read as "floating on top of"
-            // the darkened list instead of part of the same blocked layer.
-            // Tinting the bar itself the same dark color during a regroup
-            // makes the two look like one continuous scrim.
-            .toolbarBackground(regroupBarBackground, for: .navigationBar)
-            .toolbarBackground(regroupBarVisibility, for: .navigationBar)
             .fullScreenCover(item: $preview) { target in
                 DuplicatePreviewView(scanner: scanner,
                                      groups: target.groups,
