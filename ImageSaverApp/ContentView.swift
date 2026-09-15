@@ -105,6 +105,9 @@ struct ContentView: View {
                         Text(subscriptionStatusText)
                             .foregroundColor(.secondary)
                     }
+                    NavigationLink("プランを見る") {
+                        PaywallView()
+                    }
                     Button("購入を復元") {
                         Task {
                             do {

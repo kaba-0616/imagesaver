@@ -38,16 +38,26 @@
 `DuplicateFinderView`の削除処理(Fullプラン中は`ActionQuota`を参照しない)
 まで実装済み(build190〜見込み)。
 
-- **残タスク:** App Store Connectで**実際のサブスクリプショングループ・
-  2商品(Lite/Full)の作成**(価格・表示名の決定はビジネス判断)。
-  作成後、`SubscriptionManager.swift`の`SubscriptionProduct.
-  liteMonthlyID`/`fullMonthlyID`(現在プレースホルダ
-  `jp.kaba.imagesaverv2.subscription.lite.monthly`/`.full.monthly`)を
-  実際のProduct IDに合わせる。
-- 実際のペイウォールUI(2プランを比較して選んで購入する画面)は未実装。
-  現状TOP画面には「購入を復元」ボタンと現在のプラン表示のみ置いてある
-  (App Review Guideline 3.1.1対応のため、ペイウォールが無くてもこれだけ
-  は先に用意した)。
+- **App Store Connect側の作成は完了(2026-09-15)。** サブスクリプション
+  グループ「ImageSaver Plus」の中に、Full Monthly
+  (`jp.kaba.imagesaverv2.subscription.full.monthly`、表示名
+  「ImageSaver Full」)・Lite Monthly
+  (`jp.kaba.imagesaverv2.subscription.lite.monthly`、表示名
+  「ImageSaver Lite」)を作成済み。価格・配信状況・ローカリゼーション
+  (商品/グループ両方)とも設定済み。コード側のプレースホルダIDと実際の
+  製品IDが完全一致しているため、`SubscriptionManager.swift`の修正は
+  不要だった。
+- **ペイウォールUI実装済み(2026-09-15、build191〜)。**
+  `PaywallView.swift`(新規)が`SubscriptionManager.products`から
+  Full/Liteを一覧表示し(価格・説明はStoreKitから取得、Full優先で表示)、
+  「登録する」/「このプランに切り替える」ボタンで購入、現在のプランには
+  チェックマークを表示する。`ContentView`の「購入状況」セクションに
+  「プランを見る」のNavigationLinkから遷移する。
+- **残タスク:** 審査提出(「審査用に追加」)。App Store Connect側の
+  グループ・2商品(Full/Lite)の作成・価格・ローカリゼーションは完了済み
+  (製品IDがコードのプレースホルダと完全一致していたため差し替え不要
+  だった)。ペイウォールUIも揃ったので、次は実機/TestFlightでの購入
+  フロー確認 → 審査提出の順で進められる。
 - ローカルでのStoreKitテストをXcodeで行いたい場合、
   `ImageSaverApp/Monetization/Subscriptions.storekit`(Lite/Fullの2商品を
   プレースホルダ価格で用意済み)をスキームの「Run」→「Options」→
