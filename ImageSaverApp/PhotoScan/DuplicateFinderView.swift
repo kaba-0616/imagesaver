@@ -131,26 +131,18 @@ struct DuplicateFinderView: View {
                     .disabled(scanner.regrouping != nil)
                     .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    // Reachable regardless of phase: the footer copy of
-                    // this button only exists once results are on
-                    // screen, and nothing at all was reachable while
-                    // counting, scanning or grouping.
-                    //
-                    // Wrapping this ToolbarItem itself in an `if
-                    // !hideDevOnlyExtras` (rather than hiding the button
-                    // inside it, as done here) made the type checker blame
-                    // an unrelated earlier `.toolbar` call with "ambiguous
-                    // use of toolbar(content:)" -- the same failure mode
-                    // build198/199's .toolbarBackground attempt hit. Hiding
-                    // the button in place instead of removing the
-                    // ToolbarItem sidesteps that.
-                    Button { showingLog = true } label: {
-                        Image(systemName: "doc.text")
-                    }
-                    .disabled(scanner.regrouping != nil || hideDevOnlyExtras)
-                    .opacity(hideDevOnlyExtras ? 0 : (scanner.regrouping != nil ? 0.3 : 1))
-                }
+                // The toolbar used to have a fourth "ログ" button
+                // (doc.text) here. Hiding it in place (opacity 0) for the
+                // screenshot toggle left a visible gap in the toolbar's
+                // pill background, since a ToolbarItem's own layout space
+                // doesn't collapse just because its content is invisible --
+                // and removing the ToolbarItem itself with `if
+                // !hideDevOnlyExtras` broke compilation (see build206's
+                // "ambiguous use of toolbar(content:)"). Moving it into the
+                // settings sheet instead (same place MarginCropFinderView's
+                // equivalent button already lives) sidesteps both: one
+                // fewer toolbar icon, and no runtime toggle needed on the
+                // toolbar at all -- see `settingsSheet`.
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
                         Image(systemName: "gearshape")
@@ -522,6 +514,14 @@ struct DuplicateFinderView: View {
             List {
                 clearSection(kind: .identical)
                 clearSection(kind: .similar)
+                if !hideDevOnlyExtras {
+                    Section {
+                        Button("ログ") {
+                            showingSettings = false
+                            showingLog = true
+                        }
+                    }
+                }
             }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
