@@ -11,6 +11,9 @@ import Photos
 struct DuplicateFinderView: View {
 
     @StateObject private var scanner = DuplicateScanner()
+    @ObservedObject private var quota = ActionQuota.shared
+    @ObservedObject private var rewardedAd = RewardedAdManager.shared
+    @State private var showingQuotaAlert = false
 
     /// Which tab is in front of the user. Every bulk action below is scoped to
     /// it, so what is selected on the other tab can neither be counted in nor
@@ -41,7 +44,10 @@ struct DuplicateFinderView: View {
         content
             .navigationTitle("写真の重複を整理")
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { levelDisplay = Double(scanner.level) }
+            .onAppear {
+                levelDisplay = Double(scanner.level)
+                rewardedAd.load()
+            }
             .onChange(of: scanner.level) { value in levelDisplay = Double(value) }
             .onChange(of: tab) { newTab in
                 message = nil
@@ -338,6 +344,27 @@ struct DuplicateFinderView: View {
         } message: {
             Text("「最近削除した項目」に30日残ります。iCloud写真がオンの場合は他の端末からも消えます。")
         }
+        .alert("本日の削除可能数を使い切りました", isPresented: $showingQuotaAlert) {
+            if rewardedAd.isReady {
+                Button("広告を見て+\(ActionQuota.rewardedAdBonus)回") {
+                    rewardedAd.show { quota.grantRewardedBonus() }
+                }
+            }
+            Button("やめる", role: .cancel) {}
+        } message: {
+            Text("削除は1日\(ActionQuota.dailyFreeLimit)枚まで無料です。広告を見るとその場で\(ActionQuota.rewardedAdBonus)回分回復します。")
+        }
+    }
+
+    /// Gate in front of the existing delete confirmation dialog -- the
+    /// dialog itself (and `runDelete()`) are unchanged, this only decides
+    /// whether they get to run at all.
+    private func requestDelete() {
+        guard quota.canConsume(chosenCount) else {
+            showingQuotaAlert = true
+            return
+        }
+        confirmingDelete = true
     }
 
     @ViewBuilder
@@ -675,7 +702,7 @@ struct DuplicateFinderView: View {
             }
             .font(.footnote)
             Button {
-                confirmingDelete = true
+                requestDelete()
             } label: {
                 Text("削除 (\(chosenCount)枚)")
                     .font(.body.weight(.semibold))
@@ -690,6 +717,9 @@ struct DuplicateFinderView: View {
             // the user has just restarted.
             .disabled(chosenCount == 0 || scanner.regrouping != nil)
             Text("「\(tab.tabLabel)」タブで選んだ写真だけが対象です。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text("本日の残り削除可能数: \(quota.remaining)枚")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
@@ -726,6 +756,9 @@ struct DuplicateFinderView: View {
         }
         switch await scanner.delete(targets, in: tab) {
         case .done(let count):
+            // Spent only on an actual, successful deletion -- a cancel or
+            // failure below must not cost anything.
+            if count > 0 { quota.consume(count) }
             message = count > 0
                 ? "\(count)枚を削除しました。「最近削除した項目」に30日残ります。"
                 : "削除できる写真がありませんでした。"

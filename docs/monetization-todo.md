@@ -18,8 +18,13 @@
   **参加バイヤー企業の完全なID一覧**を追加する(現在はGoogle自身のID1つの
   み)。一覧は https://developers.google.com/admob/ios/privacy/strategies
   に随時更新されるため、実装時点でここから取得すること。
-- インタースティシャル広告等、追加の広告フォーマットを増やすかは未検討
-  (現状バナーのみ)。
+- **リワード広告(削除回数回復)追加済み(2026-09-15、build189〜)。**
+  重複整理の「削除」に1日20枚までの無料上限(`ActionQuota`)を設け、
+  超えるとAdMobのリワード広告(ユニット名「削除回数回復リワード」、
+  `ca-app-pub-1034383442757151/5458109681`)を見ると+20枚回復する。
+  `RewardedAdManager.swift`/`ActionQuota.swift`(いずれも
+  `ImageSaverApp/Monetization/`)を参照。MarginCrop側は現状写真を
+  一切編集しない(候補を探すだけ)ため、このカウントの対象外。
 
 ## サブスクリプション
 
