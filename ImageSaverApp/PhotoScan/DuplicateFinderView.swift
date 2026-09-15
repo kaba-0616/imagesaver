@@ -41,6 +41,17 @@ struct DuplicateFinderView: View {
     /// they were showing is untouched, and the bulk actions still work.
     @State private var showsCheckboxes = true
 
+    /// Split out of the `.toolbarBackground` call site below -- inlining
+    /// this ternary into the already-long modifier chain made the type
+    /// checker blame an unrelated `.toolbar` further up with "ambiguous
+    /// use of toolbar(content:)" instead of pointing at the real spot.
+    private var regroupBarBackground: Color {
+        scanner.regrouping != nil ? Color.black.opacity(0.5) : Color.clear
+    }
+    private var regroupBarVisibility: Visibility {
+        scanner.regrouping != nil ? .visible : .automatic
+    }
+
     var body: some View {
         content
             .navigationTitle("写真の重複を整理")
@@ -146,9 +157,8 @@ struct DuplicateFinderView: View {
             // the darkened list instead of part of the same blocked layer.
             // Tinting the bar itself the same dark color during a regroup
             // makes the two look like one continuous scrim.
-            .toolbarBackground(scanner.regrouping != nil ? Color.black.opacity(0.5) : Color.clear,
-                                for: .navigationBar)
-            .toolbarBackground(scanner.regrouping != nil ? .visible : .automatic, for: .navigationBar)
+            .toolbarBackground(regroupBarBackground, for: .navigationBar)
+            .toolbarBackground(regroupBarVisibility, for: .navigationBar)
             .fullScreenCover(item: $preview) { target in
                 DuplicatePreviewView(scanner: scanner,
                                      groups: target.groups,
