@@ -346,9 +346,17 @@ struct DuplicateFinderView: View {
                 regroupOverlay(state)
             }
         }
-        .confirmationDialog("「\(tab.tabLabel)」で選んだ\(chosenCount)枚を削除しますか？",
-                            isPresented: $confirmingDelete,
-                            titleVisibility: .visible) {
+        // `.confirmationDialog` (backed by UIAlertController's .actionSheet
+        // style) used to be here, but on this screen it reliably rendered as
+        // a popover callout instead of iPhone's usual bottom sheet --
+        // `.presentationCompactAdaptation(.sheet)` did not fix it, which
+        // points at UIKit choosing .actionSheet's popover style outright
+        // rather than a SwiftUI-level adaptation problem. `.alert` is backed
+        // by a different UIAlertController style (.alert) that has no such
+        // popover variant on any size class, and the identical quota alert
+        // below never showed the bug -- switching to it sidesteps the
+        // problem instead of fighting it.
+        .alert("「\(tab.tabLabel)」で選んだ\(chosenCount)枚を削除しますか？", isPresented: $confirmingDelete) {
             Button("削除する", role: .destructive) {
                 Task { await runDelete() }
             }
@@ -356,14 +364,6 @@ struct DuplicateFinderView: View {
         } message: {
             Text("「最近削除した項目」に30日残ります。iCloud写真がオンの場合は他の端末からも消えます。")
         }
-        // This screen also has a `.popover` (the level picker, on the reload
-        // toolbar button). With both a popover and a confirmationDialog in
-        // the same view hierarchy, iOS has a known bug where the dialog
-        // picks up popover-style (a callout with an arrow) instead of the
-        // bottom sheet it should use on iPhone -- forcing sheet adaptation
-        // here is what actually fixes it rather than working around the
-        // popover itself.
-        .modifier(SheetAdaptationIfAvailable())
         .alert("本日の削除可能数を使い切りました", isPresented: $showingQuotaAlert) {
             if rewardedAd.isReady {
                 Button("広告を見て+\(ActionQuota.rewardedAdBonus)回") {
@@ -820,18 +820,4 @@ private struct PreviewTarget: Identifiable {
     let groups: [DuplicateGroup]
     let startGroupIndex: Int
     let startMemberIndex: Int
-}
-
-/// `.presentationCompactAdaptation(.sheet)` only exists from iOS 16.4, but
-/// this project's deployment target is 15.0 -- gating it behind
-/// `#available` here (rather than raising the target) keeps it a no-op on
-/// older OSes instead of a build error.
-private struct SheetAdaptationIfAvailable: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 16.4, *) {
-            content.presentationCompactAdaptation(.sheet)
-        } else {
-            content
-        }
-    }
 }
