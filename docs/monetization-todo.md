@@ -14,10 +14,11 @@
   `MarginCropFinderView`、いずれもリスト下部にバナー1枠)。
 - 機密カテゴリ(性描写への言及・性と生殖に関する健康・出会い系・水着)は
   AdMob管理画面の「ブロック管理」からブロック設定済み。
-- **残タスク:** `project.yml`の`SKAdNetworkItems`に、Googleが公開している
-  **参加バイヤー企業の完全なID一覧**を追加する(現在はGoogle自身のID1つの
-  み)。一覧は https://developers.google.com/admob/ios/privacy/strategies
-  に随時更新されるため、実装時点でここから取得すること。
+- **SKAdNetworkItems完全一覧、追加済み(2026-09-15、build192〜)。**
+  https://developers.google.com/admob/ios/privacy/strategies から
+  Google自身のIDを含む50件を取得し`project.yml`に反映。一覧は随時
+  更新されるため、次に見直す際は同じページから再取得して差分を確認する
+  こと。
 - **リワード広告(削除回数回復)追加済み(2026-09-15、build189〜)。**
   重複整理の「削除」に1日20枚までの無料上限(`ActionQuota`)を設け、
   超えるとAdMobのリワード広告(ユニット名「削除回数回復リワード」、
@@ -68,12 +69,21 @@
 
 ## App Store Connect側の申請情報
 
-- **年齢レーティング質問票**への回答(画面UIのみ、API無し)。
-- **App Privacyラベル**(収集データの申告) -- 広告SDK追加後は申告内容が
-  増える(IDFA・広告データ等)ので、AdMob設定が固まってから記入するのが
-  安全。
-- プライバシーポリシー・サポートページの実際のホスティングと内容確定。
-- 税務・銀行口座情報の登録(収益受け取りに必須)。
+- **年齢レーティング質問票、回答完了(2026-09-15)。** 算出結果は4+。
+- **App Privacyラベル、記入・公開完了(2026-09-15)。** デバイスID・
+  広告データ(いずれもサードパーティ広告/アナリティクス目的、トラッキング
+  目的あり、ユーザー個人情報とは非紐付け)を申告。
+- **プライバシーポリシー・サポートページ、公開完了(2026-09-15)。**
+  GitHub Pages(`gh-pages`ブランチ)でホスティング:
+  https://kaba-0616.github.io/imagesaver/privacy.html ・
+  https://kaba-0616.github.io/imagesaver/support.html 。
+  App Store Connectの「アプリのプライバシー」(プライバシーポリシーURL)・
+  バージョンページの「App情報」(サポートURL)両方に登録済み。
+  問い合わせ先は`imagesaver.support@gmail.com`(プライベートのGmailとは
+  別に用意)。
+- 銀行口座情報の登録(収益受け取りに必須、AdMob支払い最低額¥8,000到達前に)。
+- 税務情報(W-8BEN、日米租税条約0%)・AdMob支払いプロフィールの電話番号は
+  登録完了済み(2026-09-15)。
 
 ## 参考
 
