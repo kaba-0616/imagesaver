@@ -266,59 +266,75 @@ struct DuplicatePreviewView: View {
     @ViewBuilder
     private var currentPhoto: some View {
         if let image = loader.image {
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .scaleEffect(scale)
-                .offset(panOffset)
-                // `pager`'s own `.scrollDisabled(scale > 1.01)` stops it from
-                // swiping pages while zoomed in, but that alone does not stop
-                // this `DragGesture` from being recognized *alongside* the
-                // pager's while at 1x -- masking it to `.subviews` (making it
-                // effectively not exist) whenever not zoomed is what actually
-                // keeps ordinary page swiping free of any competition.
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            panOffset = CGSize(width: lastPanOffset.width + value.translation.width,
-                                               height: lastPanOffset.height + value.translation.height)
-                        }
-                        .onEnded { _ in
-                            lastPanOffset = panOffset
-                        },
-                    including: scale > 1.01 ? .all : .subviews
-                )
-                .simultaneousGesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            scale = max(1, min(lastScale * value, 5))
-                        }
-                        .onEnded { _ in
-                            lastScale = scale
-                            if scale <= 1.01 {
-                                panOffset = .zero
-                                lastPanOffset = .zero
+            GeometryReader { geometry in
+                let fit = Self.fitSize(for: image.size, in: geometry.size)
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(panOffset)
+                    // `pager`'s own `.scrollDisabled(scale > 1.01)` stops it
+                    // from swiping pages while zoomed in, but that alone does
+                    // not stop this `DragGesture` from being recognized
+                    // *alongside* the pager's while at 1x -- masking it to
+                    // `.subviews` (making it effectively not exist) whenever
+                    // not zoomed is what actually keeps ordinary page
+                    // swiping free of any competition.
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                let proposed = CGSize(
+                                    width: lastPanOffset.width + value.translation.width,
+                                    height: lastPanOffset.height + value.translation.height)
+                                panOffset = Self.clampedPan(proposed, fit: fit, scale: scale,
+                                                             container: geometry.size)
                             }
+                            .onEnded { _ in
+                                lastPanOffset = panOffset
+                            },
+                        including: scale > 1.01 ? .all : .subviews
+                    )
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                scale = max(1, min(lastScale * value, 5))
+                                // Zooming out shrinks the bounds pan is
+                                // allowed to sit within -- re-clamp on every
+                                // step, not just at the end, or the photo can
+                                // visibly overshoot past its edge for the
+                                // rest of the pinch.
+                                panOffset = Self.clampedPan(panOffset, fit: fit, scale: scale,
+                                                             container: geometry.size)
+                            }
+                            .onEnded { _ in
+                                lastScale = scale
+                                if scale <= 1.01 {
+                                    panOffset = .zero
+                                    lastPanOffset = .zero
+                                } else {
+                                    lastPanOffset = panOffset
+                                }
+                            }
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation {
+                            scale = 1
+                            lastScale = 1
+                            panOffset = .zero
+                            lastPanOffset = .zero
                         }
-                )
-                .onTapGesture(count: 2) {
-                    withAnimation {
-                        scale = 1
-                        lastScale = 1
-                        panOffset = .zero
-                        lastPanOffset = .zero
                     }
-                }
-                // Declared after the double-tap gesture above (not before):
-                // that ordering is what makes SwiftUI's tap-count
-                // recognizers require the double-tap to fail before this
-                // single-tap fires, instead of both firing on every
-                // double-tap.
-                .onTapGesture(count: 1) {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        chromeHidden.toggle()
+                    // Declared after the double-tap gesture above (not
+                    // before): that ordering is what makes SwiftUI's
+                    // tap-count recognizers require the double-tap to fail
+                    // before this single-tap fires, instead of both firing
+                    // on every double-tap.
+                    .onTapGesture(count: 1) {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            chromeHidden.toggle()
+                        }
                     }
-                }
+            }
         } else if let failure = loader.failure {
             VStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
@@ -802,6 +818,37 @@ struct DuplicatePreviewView: View {
         let bounds = UIScreen.main.bounds.size
         let scale = UIScreen.main.scale
         return CGSize(width: bounds.width * scale, height: bounds.height * scale)
+    }
+
+    /// The size `.aspectRatio(contentMode: .fit)` actually renders the photo
+    /// at within `containerSize`, before any pinch-zoom `scaleEffect` -- the
+    /// baseline `clampedPan` scales up to find how far a zoomed photo can be
+    /// panned.
+    private static func fitSize(for imageSize: CGSize, in containerSize: CGSize) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0,
+              containerSize.width > 0, containerSize.height > 0 else { return containerSize }
+        let imageAspect = imageSize.width / imageSize.height
+        let containerAspect = containerSize.width / containerSize.height
+        if imageAspect > containerAspect {
+            return CGSize(width: containerSize.width, height: containerSize.width / imageAspect)
+        } else {
+            return CGSize(width: containerSize.height * imageAspect, height: containerSize.height)
+        }
+    }
+
+    /// Keeps a zoomed photo's edge flush with the screen edge when panned
+    /// that far, instead of leaving a gap of black beyond it. `panOffset`
+    /// used to be applied straight from the drag/pinch gesture with no
+    /// bound at all, which is exactly what let it be dragged past the
+    /// photo's own edge.
+    private static func clampedPan(_ offset: CGSize, fit: CGSize, scale: CGFloat,
+                                    container: CGSize) -> CGSize {
+        let scaledWidth = fit.width * scale
+        let scaledHeight = fit.height * scale
+        let maxX = max(0, (scaledWidth - container.width) / 2)
+        let maxY = max(0, (scaledHeight - container.height) / 2)
+        return CGSize(width: min(max(offset.width, -maxX), maxX),
+                      height: min(max(offset.height, -maxY), maxY))
     }
 }
 
