@@ -131,18 +131,25 @@ struct DuplicateFinderView: View {
                     .disabled(scanner.regrouping != nil)
                     .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
-                if !hideDevOnlyExtras {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        // Reachable regardless of phase: the footer copy of
-                        // this button only exists once results are on
-                        // screen, and nothing at all was reachable while
-                        // counting, scanning or grouping.
-                        Button { showingLog = true } label: {
-                            Image(systemName: "doc.text")
-                        }
-                        .disabled(scanner.regrouping != nil)
-                        .opacity(scanner.regrouping != nil ? 0.3 : 1)
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    // Reachable regardless of phase: the footer copy of
+                    // this button only exists once results are on
+                    // screen, and nothing at all was reachable while
+                    // counting, scanning or grouping.
+                    //
+                    // Wrapping this ToolbarItem itself in an `if
+                    // !hideDevOnlyExtras` (rather than hiding the button
+                    // inside it, as done here) made the type checker blame
+                    // an unrelated earlier `.toolbar` call with "ambiguous
+                    // use of toolbar(content:)" -- the same failure mode
+                    // build198/199's .toolbarBackground attempt hit. Hiding
+                    // the button in place instead of removing the
+                    // ToolbarItem sidesteps that.
+                    Button { showingLog = true } label: {
+                        Image(systemName: "doc.text")
                     }
+                    .disabled(scanner.regrouping != nil || hideDevOnlyExtras)
+                    .opacity(hideDevOnlyExtras ? 0 : (scanner.regrouping != nil ? 0.3 : 1))
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
