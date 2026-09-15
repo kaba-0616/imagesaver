@@ -271,6 +271,12 @@ struct DuplicatePreviewView: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+                    // GeometryReader places its child at .topLeading by
+                    // default (unlike the ZStack this used to sit directly
+                    // in, which centered it) -- without this explicit frame
+                    // matching the full container, the fitted image pins to
+                    // the top instead of staying centered.
+                    .frame(width: geometry.size.width, height: geometry.size.height)
                     .scaleEffect(scale)
                     .offset(panOffset)
                     // `pager`'s own `.scrollDisabled(scale > 1.01)` stops it
