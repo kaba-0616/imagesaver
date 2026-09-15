@@ -15,21 +15,43 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "480",
+          "displayPrice" : "300",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "21000001001",
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "広告非表示など (プレースホルダ、本番の内容は未確定)",
-              "displayName" : "ImageSaver Plus (月額)",
+              "description" : "広告を非表示にします (プレースホルダ、本番の価格は未確定)",
+              "displayName" : "ImageSaver Lite (月額)",
               "locale" : "ja_JP"
             }
           ],
-          "productID" : "jp.kaba.imagesaverv2.subscription.monthly",
+          "productID" : "jp.kaba.imagesaverv2.subscription.lite.monthly",
           "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "Monthly (placeholder)",
+          "referenceName" : "Lite Monthly (placeholder)",
+          "subscriptionGroupID" : "21000001",
+          "taxCategory" : "kTaxCategoryDefault",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "480",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "21000001002",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "広告非表示に加え、削除回数の上限が無くなります (プレースホルダ、本番の価格は未確定)",
+              "displayName" : "ImageSaver Full (月額)",
+              "locale" : "ja_JP"
+            }
+          ],
+          "productID" : "jp.kaba.imagesaverv2.subscription.full.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Full Monthly (placeholder)",
           "subscriptionGroupID" : "21000001",
           "taxCategory" : "kTaxCategoryDefault",
           "type" : "RecurringSubscription"

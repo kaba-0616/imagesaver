@@ -13,6 +13,7 @@ struct DuplicateFinderView: View {
     @StateObject private var scanner = DuplicateScanner()
     @ObservedObject private var quota = ActionQuota.shared
     @ObservedObject private var rewardedAd = RewardedAdManager.shared
+    @ObservedObject private var subscriptions = SubscriptionManager.shared
     @State private var showingQuotaAlert = false
 
     /// Which tab is in front of the user. Every bulk action below is scoped to
@@ -320,8 +321,10 @@ struct DuplicateFinderView: View {
                     limitedNotice.padding(.horizontal, 16).padding(.bottom, 4)
                 }
                 list
-                AdBannerView(.duplicateFinder)
-                    .frame(height: 50)
+                if !subscriptions.isAdsRemoved {
+                    AdBannerView(.duplicateFinder)
+                        .frame(height: 50)
+                }
                 bottomBar
             }
             // A regroup started from the results screen used to run behind a
@@ -360,7 +363,7 @@ struct DuplicateFinderView: View {
     /// dialog itself (and `runDelete()`) are unchanged, this only decides
     /// whether they get to run at all.
     private func requestDelete() {
-        guard quota.canConsume(chosenCount) else {
+        guard subscriptions.isUnlimitedDeletes || quota.canConsume(chosenCount) else {
             showingQuotaAlert = true
             return
         }
@@ -719,7 +722,9 @@ struct DuplicateFinderView: View {
             Text("「\(tab.tabLabel)」タブで選んだ写真だけが対象です。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
-            Text("本日の残り削除可能数: \(quota.remaining)枚")
+            Text(subscriptions.isUnlimitedDeletes
+                 ? "削除回数無制限(Fullプラン)"
+                 : "本日の残り削除可能数: \(quota.remaining)枚")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
@@ -757,8 +762,10 @@ struct DuplicateFinderView: View {
         switch await scanner.delete(targets, in: tab) {
         case .done(let count):
             // Spent only on an actual, successful deletion -- a cancel or
-            // failure below must not cost anything.
-            if count > 0 { quota.consume(count) }
+            // failure below must not cost anything. The Full plan never
+            // touches ActionQuota at all, so its remaining count is never
+            // drawn down while subscribed.
+            if count > 0 && !subscriptions.isUnlimitedDeletes { quota.consume(count) }
             message = count > 0
                 ? "\(count)枚を削除しました。「最近削除した項目」に30日残ります。"
                 : "削除できる写真がありませんでした。"

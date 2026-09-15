@@ -1,25 +1,52 @@
 import Foundation
 import StoreKit
 
-/// The product identifier isn't real yet -- no subscription exists in App
-/// Store Connect (that's a pricing/naming decision, not a code one; see
-/// docs/monetization-todo.md). Kept as a single named constant so the one
-/// place this needs to change, once a real product exists, is here.
+/// Two plans in one subscription group, so a subscriber can upgrade/downgrade
+/// between them without StoreKit treating it as cancel-and-rebuy. Neither
+/// product ID is real yet -- no subscription exists in App Store Connect
+/// (pricing/naming is a business decision, not a code one; see
+/// docs/monetization-todo.md). Kept as named constants so the one place
+/// these need to change, once real products exist, is here.
 enum SubscriptionProduct {
-    static let monthlyID = "jp.kaba.imagesaverv2.subscription.monthly"
-    static let allIDs: Set<String> = [monthlyID]
+    static let liteMonthlyID = "jp.kaba.imagesaverv2.subscription.lite.monthly"
+    static let fullMonthlyID = "jp.kaba.imagesaverv2.subscription.full.monthly"
+    static let allIDs: Set<String> = [liteMonthlyID, fullMonthlyID]
+
+    static func tier(for productID: String) -> SubscriptionTier? {
+        switch productID {
+        case liteMonthlyID: return .lite
+        case fullMonthlyID: return .full
+        default: return nil
+        }
+    }
 }
 
-/// Purchase, restore, and "is the user currently entitled" -- the three
-/// things StoreKit 2 needs for a subscription regardless of what the
-/// subscription unlocks. What it unlocks (hiding ads? something else?) is
-/// deliberately not this type's business; callers read `isSubscribed`.
+/// What each plan actually unlocks. `full` is a strict superset of `lite`
+/// (ads removed either way, unlimited deletes only on `full`) -- callers
+/// that only care about one entitlement should read `isAdsRemoved`/
+/// `isUnlimitedDeletes` rather than switching on this directly.
+enum SubscriptionTier {
+    case lite
+    case full
+}
+
+/// Purchase, restore, and "is the user currently entitled, to which plan" --
+/// the things StoreKit 2 needs for a subscription regardless of what each
+/// plan unlocks.
 @MainActor
 final class SubscriptionManager: ObservableObject {
     static let shared = SubscriptionManager()
 
-    @Published private(set) var isSubscribed = false
+    @Published private(set) var tier: SubscriptionTier?
     @Published private(set) var products: [Product] = []
+
+    /// Ads are hidden on both plans.
+    var isAdsRemoved: Bool { tier != nil }
+    /// Only the higher plan bypasses `ActionQuota`.
+    var isUnlimitedDeletes: Bool { tier == .full }
+    /// Kept for the existing "購入状況" row and Restore Purchases flow, which
+    /// only need to know "is anything active", not which plan.
+    var isSubscribed: Bool { tier != nil }
 
     private var updatesTask: Task<Void, Never>?
 
@@ -82,13 +109,17 @@ final class SubscriptionManager: ObservableObject {
     }
 
     private func refreshEntitlements() async {
-        var subscribed = false
+        var active: SubscriptionTier?
         for await result in Transaction.currentEntitlements {
-            guard case .verified(let transaction) = result else { continue }
-            if SubscriptionProduct.allIDs.contains(transaction.productID) {
-                subscribed = true
+            guard case .verified(let transaction) = result,
+                  let found = SubscriptionProduct.tier(for: transaction.productID) else { continue }
+            // Only one plan in the group should ever be active at once, but
+            // if a plan-switch transition briefly surfaces both, prefer the
+            // higher one rather than whichever the loop happened to see last.
+            if found == .full || active == nil {
+                active = found
             }
         }
-        isSubscribed = subscribed
+        tier = active
     }
 }

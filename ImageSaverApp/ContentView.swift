@@ -102,7 +102,7 @@ struct ContentView: View {
                     HStack {
                         Text("購入状況")
                         Spacer()
-                        Text(subscriptions.isSubscribed ? "有効" : "未購入")
+                        Text(subscriptionStatusText)
                             .foregroundColor(.secondary)
                     }
                     Button("購入を復元") {
@@ -122,15 +122,20 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                 } footer: {
-                    Text("課金内容は現在準備中です。")
+                    Text("Lite: 広告非表示 / Full: 広告非表示+削除回数無制限。購入画面は準備中です。")
                 }
 
                 // Bottom of the list, not top: this screen's job is the
-                // usage instructions and the two tools, not the ad.
-                Section {
-                    AdBannerView(.top)
-                        .frame(height: 50)
-                        .listRowInsets(EdgeInsets())
+                // usage instructions and the two tools, not the ad. Hidden
+                // entirely (not just skipped) once either plan is active --
+                // AdBannerView would otherwise still spend a request/fill on
+                // an ad nobody paid to avoid seeing.
+                if !subscriptions.isAdsRemoved {
+                    Section {
+                        AdBannerView(.top)
+                            .frame(height: 50)
+                            .listRowInsets(EdgeInsets())
+                    }
                 }
             }
             .navigationTitle("ImageSaver")
@@ -141,6 +146,14 @@ struct ContentView: View {
                     await subscriptions.loadProducts()
                 }
             }
+        }
+    }
+
+    private var subscriptionStatusText: String {
+        switch subscriptions.tier {
+        case .full: return "Full 有効"
+        case .lite: return "Lite 有効"
+        case nil: return "未購入"
         }
     }
 

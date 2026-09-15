@@ -28,24 +28,33 @@
 
 ## サブスクリプション
 
-- App Store Connectで**サブスクリプショングループ・商品の作成**
-  (価格・名称・説明文の決定はビジネス判断)。
-- 商品作成後、`ImageSaverApp/Monetization/SubscriptionManager.swift`の
-  `SubscriptionProduct.monthlyID`(現在プレースホルダ
-  `jp.kaba.imagesaverv2.subscription.monthly`)を実際のProduct IDに
-  合わせる。
-- **サブスクで何が変わるか**(広告非表示なのか、別の付加機能なのか)が
-  未確定。現状`SubscriptionManager.isSubscribed`は公開されているだけで、
-  どこからも参照されていない(意図的に空けてある)。
-- 実際のペイウォールUI(購入ボタンを含む画面)は未実装。現状TOP画面には
-  「購入を復元」ボタンのみ置いてある(App Review Guideline 3.1.1対応の
-  ため、ペイウォールが無くてもこれだけは先に用意した)。
+**仕様確定済み(2026-09-15)。** 1つのサブスクリプショングループに2プラン:
+- **Lite**: 広告非表示のみ。
+- **Full**: 広告非表示 + 削除回数無制限(`ActionQuota`を完全バイパス)。
+
+`SubscriptionManager.swift`(`SubscriptionTier` enum・`isAdsRemoved`/
+`isUnlimitedDeletes`)、`ContentView`/`DuplicateFinderView`/
+`MarginCropFinderView`(いずれもプラン加入中はバナー非表示)、
+`DuplicateFinderView`の削除処理(Fullプラン中は`ActionQuota`を参照しない)
+まで実装済み(build190〜見込み)。
+
+- **残タスク:** App Store Connectで**実際のサブスクリプショングループ・
+  2商品(Lite/Full)の作成**(価格・表示名の決定はビジネス判断)。
+  作成後、`SubscriptionManager.swift`の`SubscriptionProduct.
+  liteMonthlyID`/`fullMonthlyID`(現在プレースホルダ
+  `jp.kaba.imagesaverv2.subscription.lite.monthly`/`.full.monthly`)を
+  実際のProduct IDに合わせる。
+- 実際のペイウォールUI(2プランを比較して選んで購入する画面)は未実装。
+  現状TOP画面には「購入を復元」ボタンと現在のプラン表示のみ置いてある
+  (App Review Guideline 3.1.1対応のため、ペイウォールが無くてもこれだけ
+  は先に用意した)。
 - ローカルでのStoreKitテストをXcodeで行いたい場合、
-  `ImageSaverApp/Monetization/Subscriptions.storekit`をスキームの
-  「Run」→「Options」→「StoreKit Configuration」で手動設定すると、実際の
-  App Store Connect商品が無くてもシミュレータで購入フローを試せる
-  (project.yml側では未設定 -- CIの`xcodegen generate`を壊すリスクを
-  避けるため、意図的に手動設定のままにしてある)。
+  `ImageSaverApp/Monetization/Subscriptions.storekit`(Lite/Fullの2商品を
+  プレースホルダ価格で用意済み)をスキームの「Run」→「Options」→
+  「StoreKit Configuration」で手動設定すると、実際のApp Store Connect
+  商品が無くてもシミュレータで購入フローを試せる(project.yml側では未設定
+  -- CIの`xcodegen generate`を壊すリスクを避けるため、意図的に手動設定の
+  ままにしてある)。
 
 ## App Store Connect側の申請情報
 

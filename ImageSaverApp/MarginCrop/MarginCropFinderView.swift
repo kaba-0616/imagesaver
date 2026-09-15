@@ -23,6 +23,7 @@ private struct PreviewTarget: Identifiable {
 struct MarginCropFinderView: View {
 
     @StateObject private var scanner = MarginCropScanner()
+    @ObservedObject private var subscriptions = SubscriptionManager.shared
     @State private var selected: Set<String> = []
     @State private var busyIdentifiers: Set<String> = []
     // Blocks the whole grid's hit testing (not just the busy card's own
@@ -213,8 +214,10 @@ struct MarginCropFinderView: View {
             } else {
                 VStack(spacing: 0) {
                     grid
-                    AdBannerView(.marginCrop)
-                        .frame(height: 50)
+                    if !subscriptions.isAdsRemoved {
+                        AdBannerView(.marginCrop)
+                            .frame(height: 50)
+                    }
                     bottomBar
                 }
             }
