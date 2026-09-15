@@ -39,6 +39,13 @@ final class SubscriptionManager: ObservableObject {
 
     @Published private(set) var tier: SubscriptionTier?
     @Published private(set) var products: [Product] = []
+    /// `products.isEmpty` alone can't tell "still fetching" apart from "the
+    /// fetch already finished and came back empty/errored" -- the paywall
+    /// showed "読み込んでいます…" forever in both cases until this was added,
+    /// which made a real, immediately-returned error indistinguishable from
+    /// still waiting on it.
+    @Published private(set) var isLoadingProducts = true
+    @Published private(set) var loadError: String?
 
     /// Ads are hidden on both plans.
     var isAdsRemoved: Bool { tier != nil }
@@ -68,13 +75,26 @@ final class SubscriptionManager: ObservableObject {
     }
 
     func loadProducts() async {
+        isLoadingProducts = true
+        loadError = nil
         do {
-            products = try await Product.products(for: SubscriptionProduct.allIDs)
+            let fetched = try await Product.products(for: SubscriptionProduct.allIDs)
+            products = fetched
+            // `Product.products(for:)` silently drops IDs it can't resolve
+            // instead of throwing -- an empty result here is exactly what
+            // "the Paid Apps Agreement/product isn't actually live yet"
+            // looks like, and previously was indistinguishable from a
+            // genuine network failure.
+            if fetched.isEmpty {
+                loadError = "サブスクリプション商品が見つかりませんでした。App Store Connect側の設定がまだ反映されていない可能性があります。"
+            }
         } catch {
             // Not fatal: an empty `products` array just means any paywall
             // UI has nothing to list, same as "not configured yet".
             products = []
+            loadError = "商品の読み込みに失敗しました: \(error.localizedDescription)"
         }
+        isLoadingProducts = false
     }
 
     func purchase(_ product: Product) async throws {

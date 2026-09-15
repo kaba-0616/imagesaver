@@ -17,13 +17,24 @@ struct PaywallView: View {
                 ForEach(sortedProducts, id: \.id) { product in
                     planRow(product)
                 }
-                if subscriptions.products.isEmpty {
+                if subscriptions.isLoadingProducts {
                     Text("プランを読み込んでいます…")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
             } footer: {
                 Text("サブスクリプションは自動更新されます。いつでも「設定」アプリの自分のApple IDからキャンセルできます。")
+            }
+            // Distinct from `isLoadingProducts` above -- this is what shows
+            // once the fetch has actually finished and still came back
+            // empty/erroring, which used to be indistinguishable from
+            // "still loading" and looked like it never finished at all.
+            if let loadError = subscriptions.loadError {
+                Section {
+                    Text(loadError)
+                        .font(.footnote)
+                        .foregroundColor(.red)
+                }
             }
             if let errorMessage {
                 Section {
