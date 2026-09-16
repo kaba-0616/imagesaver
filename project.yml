@@ -8,12 +8,18 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    # iPhone only -- was "1,2" (universal) but the app has never been run or
-    # verified on iPad, and going universal would require iPad screenshots
-    # plus all four interface orientations declared (see the removed comment
-    # by UISupportedInterfaceOrientations below) purely to satisfy App Store
-    # Connect validation for a form factor nothing here was designed for.
-    TARGETED_DEVICE_FAMILY: "1"
+    # Universal (iPhone + iPad). A same-day attempt to go iPhone-only ("1")
+    # to dodge the iPad screenshot requirement instead hit a hard upload
+    # rejection ("Invalid bundle...need to include all of the
+    # UIInterfaceOrientationPortrait/PortraitUpsideDown/LandscapeLeft/
+    # LandscapeRight orientations to support iPad multitasking", error
+    # 90474) even with TARGETED_DEVICE_FAMILY set to iPhone-only -- Apple's
+    # upload validation apparently still expects iPad-multitasking-ready
+    # orientations regardless. Reverted back to the universal configuration
+    # that had already been uploading successfully for months; supplying
+    # iPad screenshots for App Store Connect's requirement is the actual
+    # fix instead.
+    TARGETED_DEVICE_FAMILY: "1,2"
     # Team ID and profile names aren't secrets -- only the certificate/profile
     # *files* themselves (installed at CI runtime from GitHub secrets) are.
     # The unsigned build (build.yml) overrides all of this at the xcodebuild
@@ -132,18 +138,23 @@ targets:
         # its own Info.plist keeps the add-only key alone.
         NSPhotoLibraryUsageDescription: "重複した写真や余白のある写真を探して整理するために、写真の読み取り・削除を行います。削除するものはあなたが選んだ写真だけです。"
         UILaunchScreen: {}
-        # Portrait only -- was all four orientations, required only because
-        # the app was briefly universal (TARGETED_DEVICE_FAMILY "1,2"; iPad
-        # multitasking can present any orientation regardless of what the
-        # app wants). Now iPhone-only again, and nothing in this app's UI
-        # has ever been laid out or tested for landscape.
+        # App Store Connect validation rejects an iPad-capable app
+        # (TARGETED_DEVICE_FAMILY 1,2) that doesn't declare all four
+        # orientations, since iPad multitasking can present any of them
+        # regardless of what the app itself wants to support on iPhone --
+        # confirmed to be a hard upload-time requirement (error 90474), not
+        # just a review-time nicety, when trying to drop to iPhone-only
+        # didn't remove it either.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageSaver AppStore"
     dependencies:
@@ -185,7 +196,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagesaverv2.action
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SKIP_INSTALL: true
         PROVISIONING_PROFILE_SPECIFIER: "ImageSaverAction AppStore"
