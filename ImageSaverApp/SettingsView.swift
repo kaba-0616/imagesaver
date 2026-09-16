@@ -100,20 +100,6 @@ struct SettingsView: View {
                 Text("Lite: 広告非表示 / Full: 広告非表示+削除回数無制限。購入画面は準備中です。")
             }
 
-            #if IMAGESAVER_DEV_TOOLS
-            // Placed after "購入状況" (rather than right under "バージョン",
-            // where it used to sit) so a Settings screenshot cropped to the
-            // screen's normal fold -- everything down through "購入状況" --
-            // leaves this and the version number both scrolled out of frame
-            // without needing to hide them in code, which would've meant
-            // hiding the very toggle that switches them back on.
-            Section {
-                Toggle("広告を非表示(開発用)", isOn: $subscriptions.devForceHideAds)
-            } footer: {
-                Text("App Storeのスクリーンショット撮影用。サブスクリプションを実際に購入せずに広告枠だけ隠せます。")
-            }
-            #endif
-
             // Its own placement (separate from TOP's) so AdMob's reporting
             // can tell the two apart, same reasoning as the three tool
             // screens' banners.

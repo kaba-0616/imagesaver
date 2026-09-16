@@ -38,19 +38,7 @@ struct MarginCropFinderView: View {
     @State private var message: String?
     @State private var preview: PreviewTarget?
     @State private var showingSettings = false
-    @State private var showingLog = false
     @State private var isComputingLevelCounts = false
-
-    /// Screenshot-taking aid, same toggle as ads (`devForceHideAds`) --
-    /// the log button/sheet is dev-facing and has no business showing up
-    /// in an App Store screenshot either.
-    private var hideDevOnlyExtras: Bool {
-        #if IMAGESAVER_DEV_TOOLS
-        return subscriptions.devForceHideAds
-        #else
-        return false
-        #endif
-    }
 
     var body: some View {
         content
@@ -86,9 +74,6 @@ struct MarginCropFinderView: View {
             .sheet(isPresented: $showingSettings) {
                 settingsSheet
             }
-            .sheet(isPresented: $showingLog) {
-                PhotoScanLogSheet(log: PhotoScanLog.shared) { showingLog = false }
-            }
     }
 
     private var settingsSheet: some View {
@@ -108,14 +93,6 @@ struct MarginCropFinderView: View {
                         }
                     }
                     .disabled(scanner.skippedCount == 0)
-                }
-                if !hideDevOnlyExtras {
-                    Section {
-                        Button("ログ") {
-                            showingSettings = false
-                            showingLog = true
-                        }
-                    }
                 }
                 Section {
                     NavigationLink("診断: 写真を選んで判定値を見る") {

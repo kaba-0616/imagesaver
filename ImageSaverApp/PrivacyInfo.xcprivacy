@@ -2,11 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Requesting ATT (for the ad SDK) makes this app a tracker in the
-	     sense this key means, independent of whether any individual user
-	     grants it. -->
+	<!-- This app's own code never makes a tracking network request itself;
+	     the ATT prompt only gates whether GoogleMobileAds is allowed to use
+	     IDFA-based tracking, and that SDK ships its own PrivacyInfo.xcprivacy
+	     (bundled inside its own framework) that already declares its own
+	     tracking + domains. Declaring NSPrivacyTracking=true here too, with
+	     an empty domains array, duplicated that claim at the app level and
+	     got the build rejected (ITMS-91064: "NSPrivacyTracking must be true
+	     if NSPrivacyTrackingDomains isn't empty"; Apple's validator reads
+	     true+empty as an inconsistent declaration). Matching the extension's
+	     manifest (already false) is the correct fix, not inventing a guessed
+	     domain list that could drift from what the SDK itself actually uses. -->
 	<key>NSPrivacyTracking</key>
-	<true/>
+	<false/>
 	<key>NSPrivacyTrackingDomains</key>
 	<array/>
 	<key>NSPrivacyCollectedDataTypes</key>

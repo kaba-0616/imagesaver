@@ -34,23 +34,11 @@ struct DuplicateFinderView: View {
     @State private var confirmingClearKind: DuplicateGroup.Kind?
     @State private var showingSettings = false
     @State private var message: String?
-    @State private var showingLog = false
     @State private var preview: PreviewTarget?
     /// On by default, matching how the screen always behaved before this
     /// switch existed. Off only hides the circles -- selection made while
     /// they were showing is untouched, and the bulk actions still work.
     @State private var showsCheckboxes = true
-
-    /// Screenshot-taking aid, same toggle as ads (`devForceHideAds`) --
-    /// the log button/sheet is dev-facing and has no business showing up
-    /// in an App Store screenshot either.
-    private var hideDevOnlyExtras: Bool {
-        #if IMAGESAVER_DEV_TOOLS
-        return subscriptions.devForceHideAds
-        #else
-        return false
-        #endif
-    }
 
     var body: some View {
         content
@@ -74,12 +62,9 @@ struct DuplicateFinderView: View {
                 guard !hasResult, scanner.phase == .ready, scanner.regrouping == nil else { return }
                 scanner.regroup(note: "\(newTab.tabLabel)タブを開いた", kind: newTab)
             }
-            // The log is gathered rather than written line by line, so leaving
-            // the screen is one of the points it has to be pushed out at.
+            // The log is still gathered internally for diagnostics even
+            // without a UI entry point, so it still needs to be flushed.
             .onDisappear { PhotoScanLog.shared.flush() }
-            .sheet(isPresented: $showingLog) {
-                PhotoScanLogSheet(log: PhotoScanLog.shared) { showingLog = false }
-            }
             .sheet(isPresented: $showingSettings) {
                 settingsSheet
             }
@@ -131,18 +116,6 @@ struct DuplicateFinderView: View {
                     .disabled(scanner.regrouping != nil)
                     .opacity(scanner.regrouping != nil ? 0.3 : 1)
                 }
-                // The toolbar used to have a fourth "ログ" button
-                // (doc.text) here. Hiding it in place (opacity 0) for the
-                // screenshot toggle left a visible gap in the toolbar's
-                // pill background, since a ToolbarItem's own layout space
-                // doesn't collapse just because its content is invisible --
-                // and removing the ToolbarItem itself with `if
-                // !hideDevOnlyExtras` broke compilation (see build206's
-                // "ambiguous use of toolbar(content:)"). Moving it into the
-                // settings sheet instead (same place MarginCropFinderView's
-                // equivalent button already lives) sidesteps both: one
-                // fewer toolbar icon, and no runtime toggle needed on the
-                // toolbar at all -- see `settingsSheet`.
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
                         Image(systemName: "gearshape")
@@ -253,9 +226,7 @@ struct DuplicateFinderView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            if !hideDevOnlyExtras {
-                logRow
-            }
+            versionRow
         }
         .padding(32)
     }
@@ -514,14 +485,6 @@ struct DuplicateFinderView: View {
             List {
                 clearSection(kind: .identical)
                 clearSection(kind: .similar)
-                if !hideDevOnlyExtras {
-                    Section {
-                        Button("ログ") {
-                            showingSettings = false
-                            showingLog = true
-                        }
-                    }
-                }
             }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
@@ -730,14 +693,10 @@ struct DuplicateFinderView: View {
         .padding(.bottom, 8)
     }
 
-    private var logRow: some View {
-        HStack(spacing: 10) {
-            Button("ログ") { showingLog = true }
-                .font(.caption2)
-            Text(AppVersion.short)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.secondary)
-        }
+    private var versionRow: some View {
+        Text(AppVersion.short)
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundColor(.secondary)
     }
 
     // MARK: - Bottom bar
