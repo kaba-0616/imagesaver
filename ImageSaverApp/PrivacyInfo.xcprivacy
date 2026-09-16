@@ -19,7 +19,7 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<!-- CA92.1: access info that is stored solely for this app
-				     (settings, counters, logs -- nothing shared/synced). -->
+				     (settings, counters, logs; nothing shared or synced). -->
 				<string>CA92.1</string>
 			</array>
 		</dict>

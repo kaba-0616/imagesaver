@@ -16,7 +16,7 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<!-- CA92.1: access info that is stored solely for this app
-				     (the run counter and persistent log -- nothing shared). -->
+				     (the run counter and persistent log; nothing shared). -->
 				<string>CA92.1</string>
 			</array>
 		</dict>
