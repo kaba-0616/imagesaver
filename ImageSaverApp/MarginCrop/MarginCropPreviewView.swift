@@ -81,6 +81,8 @@ struct MarginCropPreviewView: View {
             }
         }
         .onChange(of: pages.isEmpty) { empty in if empty { onClose() } }
+        .onAppear { prefetchNeighbors() }
+        .onChange(of: index) { _ in prefetchNeighbors() }
         .task(id: candidate?.id) {
             guard let candidate else { detail = nil; return }
             guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [candidate.localIdentifier], options: nil).firstObject else {
@@ -241,6 +243,38 @@ struct MarginCropPreviewView: View {
             if !processedIDs.contains(pages[candidateIndex].id) { return candidateIndex }
         }
         return nil
+    }
+
+    /// Warms Photos' own decode cache for the pages either side of the
+    /// current one, the same fix `DuplicatePreviewView` needed for its own
+    /// swipe stutter (see that file's history): each `MarginCropPhotoPage`
+    /// only starts fetching its image once it actually appears, so swiping
+    /// to a page nobody has requested yet means waiting on
+    /// `PHImageManager` from a cold start. This issues the same request
+    /// ahead of time and discards the result -- nothing is cached on this
+    /// screen's own side, relying entirely on Photos' internal cache to
+    /// make the real, later request (inside `MarginCropPhotoPage.load()`)
+    /// resolve near-instantly instead.
+    private func prefetchNeighbors() {
+        let neighborIndices = [index - 2, index - 1, index + 1, index + 2]
+            .filter { pages.indices.contains($0) }
+        guard !neighborIndices.isEmpty else { return }
+        let identifiers = neighborIndices.map { pages[$0].localIdentifier }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        var byIdentifier: [String: PHAsset] = [:]
+        assets.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
+
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+        let target = CGSize(width: 1024, height: 1024)
+
+        for identifier in identifiers {
+            guard let asset = byIdentifier[identifier] else { continue }
+            PHImageManager.default().requestImage(for: asset, targetSize: target,
+                                                  contentMode: .aspectFit, options: options) { _, _ in }
+        }
     }
 }
 
