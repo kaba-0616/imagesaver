@@ -246,6 +246,13 @@ struct MarginCropFinderView: View {
         return ZStack(alignment: .top) {
             AssetThumbnail(identifier: candidate.localIdentifier, side: 150, generation: 0)
                 .cornerRadius(8)
+                // Without this, the very top row's tap sometimes resolves to
+                // the row below it right after this screen first appears
+                // (before scrolling) -- a stale hit-testing frame around the
+                // nav bar's large-to-inline title transition, the same class
+                // of issue `DuplicateGroupCard` already guards against with
+                // this same modifier.
+                .contentShape(Rectangle())
                 .onTapGesture {
                     let items = scanner.candidates
                     guard let startIndex = items.firstIndex(where: { $0.id == candidate.id }) else { return }
