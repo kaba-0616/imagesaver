@@ -186,16 +186,6 @@ final class MarginCropScanner: ObservableObject {
     /// library instead of rescanning by hand eleven times. Does not touch
     /// `MarginCropCache` or `candidates` -- this is a read-only side
     /// report, not a real scan.
-    func scanAllLevelsForDevSummary() async -> String {
-        await withCheckedContinuation { continuation in
-            Self.queue.async {
-                Self.computeAllLevelCounts { summary in
-                    continuation.resume(returning: summary)
-                }
-            }
-        }
-    }
-
     /// Settings screen: forgets every "これはトリミングしない" decision so
     /// those photos can be offered again on the next scan.
     func clearSkipped() async -> Outcome {
@@ -477,45 +467,6 @@ final class MarginCropScanner: ObservableObject {
     /// `minMatchFraction`, both monotonic in level), so a photo `detect`
     /// rejects at level 0 is skipped entirely for the other ten rather than
     /// re-running a detector that can only get stricter from there.
-    private nonisolated static func computeAllLevelCounts(completion: @escaping (String) -> Void) {
-        let options = PHFetchOptions()
-        let assets = PHAsset.fetchAssets(with: .image, options: options)
-        var counts = [Int](repeating: 0, count: 11)
-
-        let manager = PHImageManager.default()
-        let requestOptions = PHImageRequestOptions()
-        requestOptions.deliveryMode = .fastFormat
-        requestOptions.resizeMode = .fast
-        requestOptions.isNetworkAccessAllowed = false
-        let target = CGSize(width: 512, height: 512)
-
-        assets.enumerateObjects { asset, _, _ in
-            let box = ThumbnailBox()
-            let waiter = DispatchSemaphore(value: 0)
-            manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFit,
-                                  options: requestOptions) { image, _ in
-                box.set(image?.cgImage)
-                waiter.signal()
-            }
-            _ = waiter.wait(timeout: .now() + 5)
-            guard let cgImage = box.take() else { return }
-
-            let (level0Margin, _, _) = MarginDetector.detect(in: cgImage, realWidth: asset.pixelWidth,
-                                                               realHeight: asset.pixelHeight, level: 0)
-            guard level0Margin != nil else { return }
-            counts[0] += 1
-            for level in 1...10 {
-                let (margin, _, _) = MarginDetector.detect(in: cgImage, realWidth: asset.pixelWidth,
-                                                            realHeight: asset.pixelHeight, level: level)
-                if margin != nil { counts[level] += 1 }
-            }
-        }
-
-        let lines = (0...10).map { "レベル\($0): \(counts[$0])件" }
-        let summary = "余白検出件数(全レベル、対象\(assets.count)枚):\n" + lines.joined(separator: "\n")
-        completion(summary)
-    }
-
     private enum SkipStatus {
         /// No skip decision recorded for this identifier at all.
         case notSkipped

@@ -71,6 +71,15 @@ final class SubscriptionManager: ObservableObject {
                 await self?.handle(update)
             }
         }
+        // Without this, `tier` only ever got set right after a purchase or
+        // an explicit "購入を復元" tap -- a real subscriber relaunching the
+        // app saw ads and "未購入" again every time, since `Transaction.
+        // currentEntitlements` was never actually read on a cold start.
+        // `Transaction.updates` above only delivers *changes*, not the
+        // existing entitlement state as of launch.
+        Task { [weak self] in
+            await self?.refreshEntitlements()
+        }
     }
 
     deinit {

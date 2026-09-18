@@ -37,7 +37,12 @@ struct MarginCropPreviewView: View {
     /// Which background the photo sits against. A white margin can hide
     /// against a light backdrop and a black one against a dark backdrop --
     /// switching this is how a check can actually see either edge clearly.
-    @State private var backgroundIsWhite = false
+    /// Persisted (rather than plain `@State`) so the choice survives
+    /// closing this screen or the whole app, instead of resetting to black
+    /// every time this view is freshly created.
+    @State private var backgroundIsWhite = UserDefaults.standard.bool(forKey: "marginCrop.backgroundIsWhite") {
+        didSet { UserDefaults.standard.set(backgroundIsWhite, forKey: "marginCrop.backgroundIsWhite") }
+    }
     /// Opens `MarginDiagnosticView` preloaded on whichever candidate is on
     /// screen -- added after a real-device diagnosis session where finding
     /// the same photo again through the picker was the slow part.

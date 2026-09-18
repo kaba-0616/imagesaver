@@ -38,7 +38,6 @@ struct MarginCropFinderView: View {
     @State private var message: String?
     @State private var preview: PreviewTarget?
     @State private var showingSettings = false
-    @State private var isComputingLevelCounts = false
 
     var body: some View {
         content
@@ -98,25 +97,6 @@ struct MarginCropFinderView: View {
                     NavigationLink("診断: 写真を選んで判定値を見る") {
                         MarginDiagnosticView()
                     }
-                }
-                Section {
-                    Button {
-                        Task {
-                            isComputingLevelCounts = true
-                            let summary = await scanner.scanAllLevelsForDevSummary()
-                            UIPasteboard.general.string = summary
-                            isComputingLevelCounts = false
-                        }
-                    } label: {
-                        if isComputingLevelCounts {
-                            HStack { ProgressView(); Text("集計中…") }
-                        } else {
-                            Text("全レベルの検出件数をコピー(開発用)")
-                        }
-                    }
-                    .disabled(isComputingLevelCounts)
-                } footer: {
-                    Text("ライブラリ全体を一度スキャンし、レベル0〜10それぞれで検出される件数をまとめてコピーします。件数が多いライブラリでは時間がかかります。")
                 }
             }
             .navigationTitle("設定")
