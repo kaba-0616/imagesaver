@@ -596,8 +596,15 @@ struct DuplicatePreviewView: View {
         // a run of groups while browsing backward through them should keep
         // heading backward, not lurch forward to "the next one" every time
         // just because that used to be the only direction tried first.
-        let forwardTarget = groups[(removedIndex + 1)...].first?.id
-        let backwardTarget = groups[..<removedIndex].last?.id
+        //
+        // A group can end up with only one surviving member (its other
+        // members already deleted elsewhere in this session) while still
+        // sitting in `groups` -- there is nothing left to compare/reject
+        // there, so landing on it is a dead end. Skip past any such
+        // single-member group in both directions and land on the next one
+        // that actually has something to review.
+        let forwardTarget = groups[(removedIndex + 1)...].first { $0.displayOrder.count > 1 }?.id
+        let backwardTarget = groups[..<removedIndex].last { $0.displayOrder.count > 1 }?.id
         let targetGroupID = browseDirection < 0
             ? (backwardTarget ?? forwardTarget)
             : (forwardTarget ?? backwardTarget)
