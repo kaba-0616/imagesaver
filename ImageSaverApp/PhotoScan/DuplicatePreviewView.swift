@@ -773,7 +773,7 @@ struct DuplicatePreviewView: View {
     /// as `loadCurrent()`'s own request: the download this kicks off for a
     /// cloud-only photo is the whole point of prefetching it early.
     private func prefetchNeighbors() {
-        let neighborIndices = [index - 2, index - 1, index + 1, index + 2]
+        let neighborIndices = (-5...5).filter { $0 != 0 }.map { index + $0 }
             .filter { pages.indices.contains($0) }
         guard !neighborIndices.isEmpty else { return }
         let identifiers = neighborIndices.map { pages[$0].member.localIdentifier }

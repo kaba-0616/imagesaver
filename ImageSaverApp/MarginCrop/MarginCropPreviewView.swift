@@ -261,7 +261,7 @@ struct MarginCropPreviewView: View {
     /// make the real, later request (inside `MarginCropPhotoPage.load()`)
     /// resolve near-instantly instead.
     private func prefetchNeighbors() {
-        let neighborIndices = [index - 2, index - 1, index + 1, index + 2]
+        let neighborIndices = (-5...5).filter { $0 != 0 }.map { index + $0 }
             .filter { pages.indices.contains($0) }
         guard !neighborIndices.isEmpty else { return }
         let identifiers = neighborIndices.map { pages[$0].localIdentifier }
