@@ -275,6 +275,27 @@ final class DuplicateScanner: ObservableObject {
         let rejectedSignature: Int
     }
 
+    /// Diagnostic only -- confirms or rules out a suspected regression
+    /// ("「≠」で除外した組が再照合で復活している気がする") by checking every
+    /// freshly-built group against the rejection decisions that were fed
+    /// into that same grouping pass. `DuplicateGrouper` is supposed to keep
+    /// every rejected member-set from ever landing together in one group
+    /// again; if that ever fails, this is the one place both the fresh
+    /// groups and the exact rejection sets used to build them are in scope
+    /// together, so it is the cheapest place to catch a violation rather
+    /// than needing to reproduce it interactively later.
+    private static func logRejectionViolations(_ groups: [DuplicateGroup], rejected: [Set<String>], label: String) {
+        guard !rejected.isEmpty else { return }
+        for group in groups {
+            let memberIDs = Set(group.members.map { $0.localIdentifier })
+            for decision in rejected where decision.isSubset(of: memberIDs) {
+                let shortIDs = decision.map { String($0.prefix(8)) }.joined(separator: ",")
+                PhotoScanLog.shared.note(
+                    "[!] 除外済みの組み合わせ(\(shortIDs))が\(label)の組(\(memberIDs.count)枚)に再出現")
+            }
+        }
+    }
+
     private static func computeCropCacheKey(_ prints: [PhotoFingerprint], rejected: [Set<String>]) -> CropCacheKey {
         var signature = rejected.count
         for decision in rejected { signature ^= decision.hashValue }
@@ -469,6 +490,7 @@ final class DuplicateScanner: ObservableObject {
             if runIdentical {
                 let started = CFAbsoluteTimeGetCurrent()
                 let identicalGroups = DuplicateGrouper.groupIdentical(snapshot, rejected: rejectedIdentical)
+                Self.logRejectionViolations(identicalGroups, rejected: rejectedIdentical, label: "重複")
                 let elapsed = PhotoScanFormat.milliseconds(since: started)
                 Task { @MainActor [weak self] in
                     self?.applyIdentical(identicalGroups, token: token, milliseconds: elapsed,
@@ -500,6 +522,7 @@ final class DuplicateScanner: ObservableObject {
                                                        cropTimeShare: cropTimeShare,
                                                        collectNearMisses: note.contains("(レベル0)"),
                                                        progress: progress)
+            Self.logRejectionViolations(result.groups, rejected: rejectedSimilar, label: "類似")
             let elapsed = PhotoScanFormat.milliseconds(since: started)
             Task { @MainActor [weak self] in
                 self?.applySimilar(result, token: token, milliseconds: elapsed,
