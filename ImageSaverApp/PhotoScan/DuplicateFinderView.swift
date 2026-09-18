@@ -34,6 +34,7 @@ struct DuplicateFinderView: View {
     @State private var confirmingClearKind: DuplicateGroup.Kind?
     @State private var showingSettings = false
     @State private var message: String?
+    @State private var showingLog = false
     @State private var preview: PreviewTarget?
     /// On by default, matching how the screen always behaved before this
     /// switch existed. Off only hides the circles -- selection made while
@@ -62,9 +63,10 @@ struct DuplicateFinderView: View {
                 guard !hasResult, scanner.phase == .ready, scanner.regrouping == nil else { return }
                 scanner.regroup(note: "\(newTab.tabLabel)タブを開いた", kind: newTab)
             }
-            // The log is still gathered internally for diagnostics even
-            // without a UI entry point, so it still needs to be flushed.
             .onDisappear { PhotoScanLog.shared.flush() }
+            .sheet(isPresented: $showingLog) {
+                PhotoScanLogSheet(log: PhotoScanLog.shared) { showingLog = false }
+            }
             .sheet(isPresented: $showingSettings) {
                 settingsSheet
             }
@@ -485,6 +487,12 @@ struct DuplicateFinderView: View {
             List {
                 clearSection(kind: .identical)
                 clearSection(kind: .similar)
+                Section {
+                    Button("ログ") {
+                        showingSettings = false
+                        showingLog = true
+                    }
+                }
             }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
